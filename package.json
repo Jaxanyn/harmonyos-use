@@ -22,8 +22,9 @@
     "start": "node src/server.mjs",
     "build:app": "node scripts/build-app.mjs",
     "benchmark:preview": "node scripts/preview-benchmark.mjs",
-    "check": "npm run build:app && node --check src/frame-source.mjs && node --check src/server.mjs && node --check src/mcp.mjs && node --check scripts/check-codex.mjs && node --check scripts/preview-benchmark.mjs && node test/frame-source.mjs && node test/smoke.mjs && node test/server-races.mjs && node test/mcp.mjs && node test/cancellation.mjs && node test/external-preview.mjs && node test/layout.mjs && node test/wait.mjs && node test/tap-element.mjs && node test/preview-frame.mjs && node test/acceptance.mjs && node test/app.mjs && node test/package.mjs && node test/build.mjs && node test/phase1.mjs && node test/install.mjs",
-    "package-check": "node test/package.mjs"
+    "check": "npm run build:app && node --check src/frame-source.mjs && node --check src/server.mjs && node --check src/mcp.mjs && node --check scripts/check-codex.mjs && node --check scripts/preview-benchmark.mjs && node test/frame-source.mjs && node test/inline-capture.mjs && node test/capture-local-cleanup.mjs && node test/capture-queued-cancellation.mjs && node test/preview-fast-tap.mjs && node test/preview-fast-swipe.mjs && node test/smoke.mjs && node test/server-races.mjs && node test/server-device-action.mjs && node test/server-mcp-input-races.mjs && node test/mcp.mjs && node test/cancellation.mjs && node test/external-preview.mjs && node test/layout.mjs && node test/wait.mjs && node test/tap-element.mjs && node test/device-coordinate-bounds.mjs && node test/preview-frame.mjs && node test/preview-frame-pair.mjs && node test/preview-unpaired-frame-race.mjs && node test/preview-recovery.mjs && node test/preview-recovery-stream.mjs && node test/preview-subscribers.mjs && node test/preview-subscriber-races.mjs && node test/preview-navigation.mjs && node test/preview-action-errors.mjs && node test/action-freshness.mjs && node test/preview-action-races.mjs && node test/preview-stale-reasons.mjs && node test/preview-replacement-ack.mjs && node test/direct-action-consumed-frame.mjs && node test/build-preview-freshness.mjs && node test/device-lock-races.mjs && node test/preview-benchmark.mjs && node test/acceptance.mjs && node test/app.mjs && node test/package.mjs && node test/build.mjs && node test/phase1.mjs && node test/install.mjs",
+    "package-check": "node test/package.mjs",
+    "check:browser": "npm run build:app && node test/app-browser.mjs"
   },
   "repository": {
     "type": "git",
@@ -39,6 +40,7 @@
     "ws": "^8.18.3"
   },
   "devDependencies": {
-    "esbuild": "^0.25.12"
+    "esbuild": "^0.25.12",
+    "playwright-core": "^1.65.0"
   }
 }

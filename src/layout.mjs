@@ -2,6 +2,17 @@ import { tagError } from './diagnostics.mjs';
 
 export const layoutWarnings = ['Only controls exposed by the device UI hierarchy are included; this does not prove that the full page or business workflow is available.'];
 
+export function describeLayout({ totalNodes = 0, truncated = false } = {}) {
+  const treeQuality = totalNodes === 0 ? 'empty' : truncated ? 'partial' : 'full';
+  const customRendered = treeQuality !== 'full';
+  const warnings = treeQuality === 'empty'
+    ? ['No UITest nodes were exposed; custom-rendered or protected content may still be visible in the screenshot.']
+    : treeQuality === 'partial'
+      ? ['The UITest hierarchy was truncated; omitted or custom-rendered content may still be visible in the screenshot.']
+      : [];
+  return { treeQuality, fallback: 'none', customRendered, warnings };
+}
+
 export function flattenLayout(layout) {
   if (!layout || typeof layout !== 'object') throw new Error('device layout must be a JSON object or array');
   const stack = Array.isArray(layout) ? [...layout].reverse() : [layout];

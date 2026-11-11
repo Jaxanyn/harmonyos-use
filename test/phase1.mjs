@@ -29,6 +29,7 @@ try {
   await writeFile(sentinel, 'keep');
   const frame = await adapter.capture({ deviceId: 'test-device', directory: dirname(directory), fileName: 'keep.txt' });
   assert.deepEqual(frame, { mimeType: 'image/jpeg', data: Buffer.from('frame') });
+  assert.ok(['snapshotMs', 'transferMs', 'readMs'].every((key) => Number.isFinite(frame.captureTiming?.[key]) && frame.captureTiming[key] >= 0));
   assert.ok(!calls.some(({ args }) => args[0] === 'list'), 'normal capture must not add a device probe');
   assert.ok(calls.some(({ args }) => args.includes('rm') && args.includes('-f')), 'remote screenshot must be cleaned up');
   assert.ok(calls.every(({ options }) => Number.isFinite(options?.timeoutMs) && options.timeoutMs > 0), 'HDC calls must receive a timeout');

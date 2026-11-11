@@ -71,6 +71,14 @@ try {
   const capabilities = await fetch(`http://127.0.0.1:${port}/api/capabilities`);
   assert.deepEqual(await capabilities.json(), {
     name: 'harmonyos-preview', version: 1,
+    frameSources: {
+      selected: 'jpeg', streaming: false, available: ['jpeg'], fallback: 'jpeg',
+      formats: {
+        jpeg: { available: true, mode: 'snapshot_display' },
+        mjpeg: { available: false, reason: 'device adapter exposes snapshot_display only' },
+        h264: { available: false, reason: 'device adapter exposes snapshot_display only' }
+      }
+    },
     http: ['GET /api/devices', 'POST /api/capture', 'POST /api/tap'],
     websocket: `ws://127.0.0.1:${port}/preview`,
     messages: ['device-list', 'screenshot', 'tap', 'swipe', 'long-press', 'key-event', 'input-text', 'preview-start', 'preview-stop', 'build-run']
@@ -139,7 +147,11 @@ try {
     socket.once('message', resolve);
     socket.send(JSON.stringify({ type: 'screenshot', deviceId: 'test-device' }));
   });
-  assert.deepEqual(JSON.parse(screenshot.toString()), { type: 'frame-meta', mimeType: 'image/jpeg', deviceId: 'test-device', source: 'capture' });
+  const screenshotMeta = JSON.parse(screenshot.toString());
+  assert.deepEqual({ type: screenshotMeta.type, mimeType: screenshotMeta.mimeType, deviceId: screenshotMeta.deviceId, source: screenshotMeta.source },
+    { type: 'frame-meta', mimeType: 'image/jpeg', deviceId: 'test-device', source: 'capture' });
+  assert.match(screenshotMeta.frameId, /^[\da-f-]{36}$/);
+  assert.ok(Number.isFinite(Date.parse(screenshotMeta.capturedAt)));
 
   const liveFrames = [];
   const liveTicks = [];

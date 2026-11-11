@@ -18,5 +18,5 @@ const bundle = await build({
 const template = await readFile(templatePath, 'utf8');
 const script = new TextDecoder().decode(bundle.outputFiles[0].contents);
 if (!template.includes('<!-- APP_SCRIPT -->')) throw new Error('App template marker is missing');
-await writeFile(outputPath, template.replace('<!-- APP_SCRIPT -->', `<script>${script}</script>`), 'utf8');
+await writeFile(outputPath, template.replace('<!-- APP_SCRIPT -->', () => `<script>${script}</script>`), 'utf8');
 console.log(`app: built ${outputPath}`);

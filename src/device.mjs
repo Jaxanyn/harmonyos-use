@@ -3,22 +3,31 @@ import { randomUUID } from 'node:crypto';
 import { join } from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { flattenLayout, layoutWarnings, matchesSelector, requireTapTarget, validateSelector } from './layout.mjs';
+import { describeLayout, flattenLayout, layoutWarnings, matchesSelector, requireTapTarget, validateSelector } from './layout.mjs';
 import { tagError, toDiagnostic } from './diagnostics.mjs';
 
 const runtimeDirectory = fileURLToPath(new URL('../.runtime', import.meta.url));
 const configuredTimeoutMs = Number(process.env.HARMONY_PREVIEW_HDC_TIMEOUT_MS ?? 15000);
 const defaultTimeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? configuredTimeoutMs : 15000;
+const maxInlinePixels = 2048 * 2048;
+const maxInlineOutputBytes = 16 * 1024 * 1024;
 
 export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtime = runCommand, timeoutMs = defaultTimeoutMs, directory = runtimeDirectory } = {}) {
   const commandTimeoutMs = Number.isFinite(timeoutMs) && timeoutMs > 0 ? timeoutMs : defaultTimeoutMs;
   let captures = Promise.resolve();
-  async function hdc(args, { timeoutMs: callTimeoutMs = commandTimeoutMs, deadline = Infinity, errorCode = 'HDC_FAILED', stage = 'hdc', probe = true, signal } = {}) {
+  const inlineUnavailable = new Set();
+  const previewTapCapabilities = new Map();
+  const previewSwipeCapabilities = new Map();
+  const fastPreviewTapDevice = process.env.HARMONY_PREVIEW_FAST_TAP ?? '';
+  const fastPreviewSwipeDevice = process.env.HARMONY_PREVIEW_FAST_SWIPE ?? '';
+  async function hdc(args, { timeoutMs: callTimeoutMs = commandTimeoutMs, deadline = Infinity, errorCode = 'HDC_FAILED', stage = 'hdc', probe = true, signal, maxOutputBytes, onRuntimeStart } = {}) {
     const remaining = deadline - performance.now();
     try {
       if (signal?.aborted) throw abortError();
       if (remaining <= 0) throw deadlineError(stage, errorCode);
-      const result = await awaitWithAbort(runtime(command, args, { timeoutMs: Math.min(callTimeoutMs, remaining), signal }), signal);
+      const execution = runtime(command, args, { timeoutMs: Math.min(callTimeoutMs, remaining), signal, ...(maxOutputBytes ? { maxOutputBytes } : {}) });
+      onRuntimeStart?.(execution);
+      const result = await awaitWithAbort(execution, signal);
       if (hdcFailed(result)) {
         const error = tagError(Object.assign(new Error(result.stderr.trim() || result.stdout.trim() || 'HDC command failed'), { exitCode: result.code }), result.code === 124 ? 'HDC_TIMEOUT' : errorCode, stage);
         if (result.code === 124 && remaining <= callTimeoutMs) error.code = 'WAIT_TIMEOUT';
@@ -46,6 +55,23 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
     return parseTargets(result.stdout);
   }
 
+  // HDC currently exposes a bounded screenshot primitive only. Keep this
+  // explicit so a future adapter can advertise a real long lived stream.
+  async function getFrameSourceCapabilities({ deviceId } = {}) {
+    return {
+      deviceId,
+      selected: 'jpeg',
+      streaming: false,
+      available: ['jpeg'],
+      formats: {
+        jpeg: { available: true, mode: 'snapshot_display' },
+        mjpeg: { available: false, reason: 'HDC adapter has no long lived MJPEG endpoint' },
+        h264: { available: false, reason: 'HDC adapter has no long lived H.264 endpoint' }
+      },
+      fallback: 'jpeg'
+    };
+  }
+
   function capture(options, { timeoutMs: budgetMs, signal } = {}) {
     // Keep screenshot transfers ordered across browser polling and MCP captures.
     const deadline = budgetMs === undefined ? Infinity : performance.now() + budgetMs;
@@ -58,18 +84,23 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
       return captureFrame(options, { deadline, signal });
     });
     captures = next.catch(() => {});
-    if (!Number.isFinite(deadline)) return next;
+    if (!Number.isFinite(deadline) && !signal) return next;
     return new Promise((resolve, reject) => {
       let settled = false;
-      const onAbort = () => { if (!settled) { settled = true; reject(abortError()); } };
-      signal?.addEventListener('abort', onAbort, { once: true });
-      timer = setTimeout(() => {
-        if (!started && !settled) { settled = true; reject(Object.assign(deadlineError('capture_queue', 'CAPTURE_FAILED'), { deviceId: options?.deviceId ?? null })); }
-      }, Math.max(1, deadline - performance.now()));
-      next.then((value) => { if (!settled) { settled = true; resolve(value); } }, (error) => { if (!settled) { settled = true; reject(error); } }).finally(() => {
+      const finish = (callback, value) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timer);
         signal?.removeEventListener('abort', onAbort);
-      });
+        callback(value);
+      };
+      const onAbort = () => finish(reject, abortError());
+      if (signal?.aborted) onAbort();
+      else signal?.addEventListener('abort', onAbort, { once: true });
+      if (!settled && Number.isFinite(deadline)) timer = setTimeout(() => {
+        if (!started) finish(reject, Object.assign(deadlineError('capture_queue', 'CAPTURE_FAILED'), { deviceId: options?.deviceId ?? null }));
+      }, Math.max(1, deadline - performance.now()));
+      next.then((value) => finish(resolve, value), (error) => finish(reject, error));
     });
   }
 
@@ -86,24 +117,72 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
     const local = join(directory, `capture-${process.pid}-${captureId}.jpeg`);
     let stage = 'capture';
     let frameReady = false;
+    let legacyAttempted = false;
+    let transferCompletion;
+    const captureTiming = {};
     try {
+      if (width !== undefined && width * height <= maxInlinePixels && !inlineUnavailable.has(deviceId)) {
+        const inlineRemote = `/data/local/tmp/harmonyos-preview-${process.pid}-${captureId}-inline.jpeg`;
+        const marker = `HARMONY_PREVIEW_${captureId.replaceAll('-', '')}`;
+        const script = `trap 'rm -f ${inlineRemote} >/dev/null 2>&1' EXIT; if ! command -v base64 >/dev/null 2>&1; then printf '${marker}_UNSUPPORTED\\n'; elif snapshot_display -w ${width} -h ${height} -f ${inlineRemote} >/dev/null 2>&1; then printf '${marker}_BEGIN\\n' && base64 ${inlineRemote} && printf '\\n${marker}_END\\n'; fi`;
+        let inlineSucceeded = false;
+        try {
+          const stepStartedAt = performance.now();
+          const result = await hdc(['-t', deviceId, 'shell', script], { deadline, signal, errorCode: 'CAPTURE_FAILED', stage, probe: false, maxOutputBytes: maxInlineOutputBytes });
+          if (result.stdout?.trim() === `${marker}_UNSUPPORTED`) inlineUnavailable.add(deviceId);
+          if (Buffer.byteLength(result.stdout ?? '') > maxInlineOutputBytes) throw new Error('Combined screenshot response is too large');
+          const data = decodeInlineJpeg(result.stdout, marker);
+          if (!data) throw new Error('Combined screenshot response is invalid');
+          const frame = { mimeType: 'image/jpeg', data };
+          Object.defineProperty(frame, 'captureTiming', { value: { combinedMs: Math.max(0, Math.round(performance.now() - stepStartedAt)) }, enumerable: false });
+          inlineSucceeded = true;
+          frameReady = true;
+          return frame;
+        } catch (error) {
+          if (signal?.aborted || error?.name === 'AbortError' || error?.code === 'ABORT_ERR') throw abortError();
+          if (error?.errorCode === 'HDC_UNAVAILABLE') throw tagError(Object.assign(new Error('HDC executable unavailable'), { code: error.code }), 'HDC_UNAVAILABLE', stage);
+          if (error?.errorCode === 'HDC_TIMEOUT' || error?.code === 'WAIT_TIMEOUT') {
+            throw tagError(Object.assign(new Error('Combined screenshot timed out'), { code: error.code, exitCode: error.exitCode }), 'HDC_TIMEOUT', stage);
+          }
+        } finally {
+          if (!inlineSucceeded) {
+            const cleanup = hdc(['-t', deviceId, 'shell', 'rm', '-f', inlineRemote], { timeoutMs: Math.min(commandTimeoutMs, 2000), stage: 'capture_cleanup', probe: false }).catch(() => {});
+            if (!signal?.aborted) await cleanup;
+          }
+        }
+      }
       const snapshotArgs = ['-t', deviceId, 'shell', 'snapshot_display'];
+      legacyAttempted = true;
       if (width !== undefined) snapshotArgs.push('-w', String(width), '-h', String(height));
       snapshotArgs.push('-f', remote);
+      let stepStartedAt = performance.now();
       await hdc(snapshotArgs, { deadline, signal, errorCode: 'CAPTURE_FAILED', stage });
+      captureTiming.snapshotMs = Math.max(0, Math.round(performance.now() - stepStartedAt));
       stage = 'capture_transfer';
-      await hdc(['-t', deviceId, 'file', 'recv', remote, local], { deadline, signal, errorCode: 'CAPTURE_FAILED', stage });
+      stepStartedAt = performance.now();
+      await hdc(['-t', deviceId, 'file', 'recv', remote, local], { deadline, signal, errorCode: 'CAPTURE_FAILED', stage,
+        onRuntimeStart: (execution) => { transferCompletion = execution?.closed ?? execution; } });
+      captureTiming.transferMs = Math.max(0, Math.round(performance.now() - stepStartedAt));
       stage = 'capture_read';
+      stepStartedAt = performance.now();
       const frame = { mimeType: 'image/jpeg', data: readFileSync(local) };
+      captureTiming.readMs = Math.max(0, Math.round(performance.now() - stepStartedAt));
+      Object.defineProperty(frame, 'captureTiming', { value: captureTiming, enumerable: false });
       frameReady = true;
       return frame;
     } catch (error) {
       throw tagError(error, 'CAPTURE_FAILED', stage);
     } finally {
       try { unlinkSync(local); } catch {}
-      const cleanup = hdc(['-t', deviceId, 'shell', 'rm', '-f', remote], { timeoutMs: Math.min(commandTimeoutMs, 2000), stage: 'capture_cleanup', probe: false }).catch(() => {});
-      // shortcut: aborted cleanup may finish after the next capture; remote paths are unique.
-      if (!frameReady && !signal?.aborted) await cleanup;
+      // An aborted transfer may still create or hold the file until its process closes.
+      if (transferCompletion) Promise.resolve(transferCompletion).then(() => {
+        try { unlinkSync(local); } catch {}
+      }, () => { try { unlinkSync(local); } catch {} });
+      if (legacyAttempted) {
+        const cleanup = hdc(['-t', deviceId, 'shell', 'rm', '-f', remote], { timeoutMs: Math.min(commandTimeoutMs, 2000), stage: 'capture_cleanup', probe: false }).catch(() => {});
+        // shortcut: aborted cleanup may finish after the next capture; remote paths are unique.
+        if (!frameReady && !signal?.aborted) await cleanup;
+      }
     }
   }
 
@@ -139,7 +218,9 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
   async function observe({ deviceId, bundleName, maxNodes = 200 } = {}, options = {}) {
     if (!Number.isInteger(maxNodes) || maxNodes < 1 || maxNodes > 1000) throw new Error('maxNodes must be an integer from 1 to 1000');
     const result = await readLayout({ deviceId, bundleName }, options);
-    return { ...result, nodes: result.nodes.slice(0, maxNodes), totalNodes: result.nodes.length, truncated: result.nodes.length > maxNodes, warnings: [...layoutWarnings] };
+    const observed = { ...result, nodes: result.nodes.slice(0, maxNodes), totalNodes: result.nodes.length, truncated: result.nodes.length > maxNodes };
+    const quality = describeLayout(observed);
+    return { ...observed, ...quality, warnings: [...layoutWarnings, ...quality.warnings] };
   }
 
   async function find({ deviceId, bundleName, selector, limit = 20 } = {}, options = {}) {
@@ -210,6 +291,37 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
     return { deviceId, x: Math.round(x), y: Math.round(y) };
   }
 
+  function preparePreviewTap({ deviceId } = {}) {
+    if (!deviceId) return Promise.reject(new Error('deviceId is required'));
+    if (deviceId !== fastPreviewTapDevice) return Promise.resolve(false);
+    if (!previewTapCapabilities.has(deviceId)) {
+      const probe = hdc(['-t', deviceId, 'shell', 'command -v uinput >/dev/null 2>&1 && uinput --help'],
+        { stage: 'preview_tap_probe', probe: false }).then(({ stdout }) => {
+        const touch = stdout.match(/(?:^|\n)\s*-T\s+--touch\b([\s\S]*?)(?=\n\s*-[A-Zk?]\s+--|$)/)?.[1];
+        return Boolean(touch && /-c\s+<[^>]+>\s+<[^>]+>/i.test(touch));
+      }).catch(() => false);
+      previewTapCapabilities.set(deviceId, probe);
+    }
+    return previewTapCapabilities.get(deviceId);
+  }
+
+  async function previewTap({ deviceId, x, y } = {}, { signal } = {}) {
+    if (!deviceId) throw new Error('deviceId is required');
+    if (!Number.isFinite(x) || !Number.isFinite(y) || x < 0 || y < 0) throw new Error('x and y must be non-negative finite numbers');
+    const supported = await awaitWithAbort(preparePreviewTap({ deviceId }), signal);
+    if (signal?.aborted) throw abortError();
+    if (!supported) return { ...(await tap({ deviceId, x, y }, { signal })), metrics: { inputMethod: 'uitest' } };
+    const point = { x: Math.round(x), y: Math.round(y) };
+    const marker = `HARMONY_TAP_${randomUUID().replaceAll('-', '')}`;
+    const script = `if uinput -T -c ${point.x} ${point.y} 20; then printf '\\n${marker}_OK\\n'; else printf '\\n${marker}_FAILED\\n'; fi`;
+    const result = await hdc(['-t', deviceId, 'shell', script], { signal, errorCode: 'ACTION_FAILED', stage: 'preview_tap', probe: false });
+    const output = (result.stdout + '\n' + result.stderr).replace(/\bno\s+error\b|\bpermission\s+granted\b/gi, '');
+    if (!result.stdout.includes(`${marker}_OK`) || /\b(error|fail|failed|failure|denied|permission|not permitted|unable|unsupported)\b/i.test(output)) {
+      throw tagError(new Error('Preview tap result unknown; check the device before trying again'), 'ACTION_FAILED', 'preview_tap');
+    }
+    return { deviceId, ...point, metrics: { inputMethod: 'uinput' } };
+  }
+
   async function tapElement({ deviceId, bundleName, selector } = {}, options = {}) {
     const found = await find({ deviceId, bundleName, selector, limit: 2 }, options);
     const target = requireTapTarget(found);
@@ -225,6 +337,45 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
     await hdc(['-t', deviceId, 'shell', 'uitest', 'uiInput', 'swipe',
       ...points.map((point) => String(Math.round(point))), String(velocity)], { signal, errorCode: 'ACTION_FAILED', stage: 'swipe' });
     return { deviceId, fromX: Math.round(fromX), fromY: Math.round(fromY), toX: Math.round(toX), toY: Math.round(toY), velocity };
+  }
+
+  function preparePreviewSwipe({ deviceId } = {}) {
+    if (!deviceId) return Promise.reject(new Error('deviceId is required'));
+    if (deviceId !== fastPreviewSwipeDevice) return Promise.resolve(false);
+    if (!previewSwipeCapabilities.has(deviceId)) {
+      const probe = hdc(['-t', deviceId, 'shell', 'command -v uinput >/dev/null 2>&1 && uinput --help'],
+        { stage: 'preview_swipe_probe', probe: false }).then(({ stdout }) => {
+        const touch = stdout.match(/(?:^|\n)\s*-T\s+--touch\b([\s\S]*?)(?=\n\s*-[A-Zk?]\s+--|$)/)?.[1];
+        return Boolean(touch && /-m\s+<[^>]+>\s+<[^>]+>\s+<[^>]+>\s+<[^>]+>/i.test(touch));
+      }).catch(() => false);
+      previewSwipeCapabilities.set(deviceId, probe);
+    }
+    return previewSwipeCapabilities.get(deviceId);
+  }
+
+  async function previewSwipe({ deviceId, fromX, fromY, toX, toY, velocity = 600 } = {}, { signal } = {}) {
+    const values = [fromX, fromY, toX, toY];
+    if (!deviceId) throw new Error('deviceId is required');
+    if (values.some((value) => !Number.isFinite(value) || value < 0)) throw new Error('swipe coordinates must be non-negative finite numbers');
+    if (!Number.isInteger(velocity) || velocity < 200 || velocity > 40000) throw new Error('velocity must be an integer from 200 to 40000');
+    const [x1, y1, x2, y2] = values.map(Math.round);
+    const durationMs = Math.round(Math.hypot(x2 - x1, y2 - y1) * 1000 / velocity);
+    const fallback = async () => ({ ...(await swipe({ deviceId, fromX, fromY, toX, toY, velocity }, { signal })), metrics: { inputMethod: 'uitest' } });
+    // Keep time for HDC startup and cleanup before attempting a fast gesture.
+    if (durationMs < 1 || durationMs > 15000 || durationMs + 2000 > commandTimeoutMs) return fallback();
+    const supported = await awaitWithAbort(preparePreviewSwipe({ deviceId }), signal);
+    if (signal?.aborted) throw abortError();
+    if (!supported) return fallback();
+    const marker = `HARMONY_SWIPE_${randomUUID().replaceAll('-', '')}`;
+    const script = `if uinput -T -m ${x1} ${y1} ${x2} ${y2} ${durationMs}; then printf '\\n${marker}_OK\\n'; else printf '\\n${marker}_FAILED\\n'; fi`;
+    try {
+      const result = await hdc(['-t', deviceId, 'shell', script], { signal, errorCode: 'ACTION_FAILED', stage: 'preview_swipe', probe: false });
+      const output = (result.stdout + '\n' + result.stderr).replace(/\bno\s+error\b|\bpermission\s+granted\b/gi, '');
+      if (!result.stdout.includes(`${marker}_OK`) || /\b(error|fail|failed|failure|denied|permission|not permitted|unable|unsupported)\b/i.test(output)) throw new Error('uncertain input');
+    } catch (error) {
+      throw tagError(Object.assign(new Error('Preview swipe result unknown; check the device before trying again'), { cause: error }), 'ACTION_FAILED', 'preview_swipe');
+    }
+    return { deviceId, fromX: x1, fromY: y1, toX: x2, toY: y2, velocity, metrics: { inputMethod: 'uinput' } };
   }
 
   async function longPress({ deviceId, x, y } = {}, { signal } = {}) {
@@ -253,7 +404,46 @@ export function createDeviceAdapter({ command = process.env.HDC ?? 'hdc', runtim
     return { deviceId, text, ...(hasPoint ? { x: Math.round(x), y: Math.round(y) } : {}) };
   }
 
-  return { listTargets, capture, observe, find, waitFor, install, launch, tap, tapElement, swipe, longPress, keyEvent, inputText };
+  return { listTargets, getFrameSourceCapabilities, capture, observe, find, waitFor, install, launch, tap, preparePreviewTap, previewTap, tapElement, swipe, preparePreviewSwipe, previewSwipe, longPress, keyEvent, inputText };
+}
+
+function decodeInlineJpeg(stdout, marker) {
+  if (typeof stdout !== 'string') return null;
+  const begin = `${marker}_BEGIN`;
+  const end = `${marker}_END`;
+  const start = stdout.indexOf(begin);
+  const stop = stdout.indexOf(end, start + begin.length);
+  if (start < 0 || stop < 0 || stdout.slice(0, start).trim() || stdout.slice(stop + end.length).trim()) return null;
+  const body = stdout.slice(start + begin.length, stop);
+  if (!/^\r?\n/.test(body) || !/\r?\n$/.test(body)) return null;
+  const encoded = body.replace(/\s/g, '');
+  if (!encoded || encoded.length % 4 !== 0 || !/^[A-Za-z0-9+/]*={0,2}$/.test(encoded)) return null;
+  const data = Buffer.from(encoded, 'base64');
+  if (data.toString('base64') !== encoded || !completeJpeg(data)) return null;
+  return data;
+}
+
+function completeJpeg(data) {
+  if (data.length < 12 || data[0] !== 0xff || data[1] !== 0xd8 || data.at(-2) !== 0xff || data.at(-1) !== 0xd9) return false;
+  let offset = 2;
+  let hasFrame = false;
+  while (offset + 3 < data.length) {
+    if (data[offset++] !== 0xff) return false;
+    while (data[offset] === 0xff) offset += 1;
+    const marker = data[offset++];
+    if (marker === 0xd9 || marker === 0x00) return false;
+    if (marker === 0x01 || (marker >= 0xd0 && marker <= 0xd7)) continue;
+    if (offset + 2 > data.length) return false;
+    const length = data.readUInt16BE(offset);
+    if (length < 2 || offset + length > data.length - 2) return false;
+    if ([0xc0, 0xc1, 0xc2, 0xc3, 0xc5, 0xc6, 0xc7, 0xc9, 0xca, 0xcb, 0xcd, 0xce, 0xcf].includes(marker)) {
+      if (length < 8 || data.readUInt16BE(offset + 3) === 0 || data.readUInt16BE(offset + 5) === 0) return false;
+      hasFrame = true;
+    }
+    if (marker === 0xda) return hasFrame && offset + length < data.length - 2;
+    offset += length;
+  }
+  return false;
 }
 
 function deadlineError(stage, errorCode) {
@@ -274,12 +464,17 @@ function validateBundleName(bundleName) {
   }
 }
 
-export function runCommand(command, args, { timeoutMs = defaultTimeoutMs, signal } = {}) {
-  return new Promise((resolve, reject) => {
-    if (signal?.aborted) { reject(abortError()); return; }
-    const child = spawn(command, args, { windowsHide: true, signal });
+export function runCommand(command, args, { timeoutMs = defaultTimeoutMs, signal, maxOutputBytes = Infinity } = {}) {
+  let markClosed;
+  const closed = new Promise((resolve) => { markClosed = resolve; });
+  const result = new Promise((resolve, reject) => {
+    if (signal?.aborted) { markClosed(); reject(abortError()); return; }
+    let child;
+    try { child = spawn(command, args, { windowsHide: true, signal }); }
+    catch (error) { markClosed(); reject(error); return; }
     let stdout = '';
     let stderr = '';
+    let outputBytes = 0;
     let settled = false;
     let terminating = false;
     const timer = Number.isFinite(timeoutMs) && timeoutMs > 0 ? setTimeout(() => {
@@ -292,17 +487,36 @@ export function runCommand(command, args, { timeoutMs = defaultTimeoutMs, signal
         resolve({ code: 124, stdout, stderr });
       });
     }, timeoutMs) : null;
-    child.stdout.on('data', (chunk) => { stdout += chunk; });
-    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    const appendOutput = (chunk, isStderr) => {
+      if (settled || terminating) return;
+      outputBytes += chunk.length;
+      if (outputBytes > maxOutputBytes) {
+        terminating = true;
+        if (timer) clearTimeout(timer);
+        terminateProcessTree(child).finally(() => {
+          if (settled) return;
+          settled = true;
+          reject(Object.assign(new Error('Command output exceeded limit'), { code: 'OUTPUT_LIMIT' }));
+        });
+        return;
+      }
+      if (isStderr) stderr += chunk;
+      else stdout += chunk;
+    };
+    child.stdout.on('data', (chunk) => appendOutput(chunk, false));
+    child.stderr.on('data', (chunk) => appendOutput(chunk, true));
     child.on('error', (error) => {
       if (timer) clearTimeout(timer);
       if (!settled) { settled = true; reject(error); }
     });
     child.on('close', (code) => {
+      markClosed();
       if (timer) clearTimeout(timer);
       if (!settled && !terminating) { settled = true; resolve({ code: code ?? 1, stdout, stderr }); }
     });
   });
+  result.closed = closed;
+  return result;
 }
 
 function abortableDelay(timeoutMs, signal) {

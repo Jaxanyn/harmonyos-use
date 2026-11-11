@@ -1,9 +1,16 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
+import { Script } from 'node:vm';
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url)));
 assert.deepEqual(packageJson.files, ['README.md', 'bin', 'src', 'docs', 'skills', 'scripts']);
 assert.equal(packageJson.bin['harmonyos-preview'], 'bin/harmonyos-preview.mjs');
+
+const appResource = readFileSync(new URL('../src/app/resource.html', import.meta.url), 'utf8');
+const appScript = appResource.match(/<script>([\s\S]*?)<\/script>/);
+assert.ok(appScript, 'built app resource must contain its script');
+assert.doesNotMatch(appScript[1], /<!-- APP_SCRIPT -->/, 'template marker must not be inserted into the bundled script');
+assert.doesNotThrow(() => new Script(appScript[1]), 'built app script must be valid JavaScript');
 
 const files = [
   'README.md',

@@ -39,6 +39,7 @@ try {
   const tapReady = new Promise((resolve) => { tapStarted = resolve; });
   let releaseTap;
   const mcp = startMcp({ input, output, port: 0, projectPath: '', deviceAdapter: {
+    capture: async () => ({ mimeType: 'image/jpeg', data: Buffer.from('unchanged-preview') }),
     waitFor: async (_args, { signal } = {}) => new Promise((resolve, reject) => {
       waitStarted();
       const onAbort = () => reject(Object.assign(new Error('cancelled'), { name: 'AbortError', code: 'ABORT_ERR' }));
@@ -79,6 +80,24 @@ try {
     assert.equal((await receive()).id, firstTapId);
     assert.equal((await receive()).id, secondTapId);
     assert.equal(tapCount, 2);
+    const previewStartId = send('tools/call', { name: 'preview_start', arguments: { deviceId: 'test-device' } });
+    assert.equal((await receive()).id, previewStartId);
+    send('tools/call', { name: 'preview_frame', arguments: { afterSeq: 0 } });
+    const frame = (await receive()).result.structuredContent;
+    const frameWaitId = send('tools/call', { name: 'preview_frame', arguments: { afterSeq: frame.seq, waitMs: 800 } });
+    const framePingId = send('ping');
+    assert.equal((await receive()).id, framePingId, 'frame waiting must not block other requests');
+    sendNotification('$/cancelRequest', { requestId: frameWaitId });
+    const cancelledFrame = await receive();
+    assert.equal(cancelledFrame.id, frameWaitId);
+    assert.equal(cancelledFrame.error?.code, -32800, 'ordinary frame waiting must honor request cancellation');
+    const closingFrameId = send('tools/call', { name: 'preview_frame', arguments: { afterSeq: frame.seq, waitMs: 5000 } });
+    const closingPingId = send('ping');
+    assert.equal((await receive()).id, closingPingId);
+    input.end();
+    const closingFrame = await receive();
+    assert.equal(closingFrame.id, closingFrameId);
+    assert.equal(closingFrame.error?.code, -32800, 'closing the MCP connection must cancel and clean up frame waiting');
   } finally {
     input.end();
     await mcp;

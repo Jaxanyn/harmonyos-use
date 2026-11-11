@@ -3,7 +3,7 @@ import { mkdtemp, readdir, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { createDeviceAdapter } from '../src/device.mjs';
-import { flattenLayout, matchesSelector, requireTapTarget, validateSelector } from '../src/layout.mjs';
+import { describeLayout, flattenLayout, matchesSelector, requireTapTarget, validateSelector } from '../src/layout.mjs';
 
 const layout = { attributes: { id: 'root', type: 'Column', bounds: '[0,0][1080,1920]' }, children: [
   { attributes: { id: 'confirm-a', text: '确认', type: 'Button', bounds: '[10, 20][110, 80]', clickable: 'true', enabled: 'true', focused: 'false', visible: true } },
@@ -24,6 +24,9 @@ assert.equal(nodes[4].center, undefined);
 assert.equal(matchesSelector(nodes[1], { text: '确认', type: 'Button', enabled: true }), true);
 assert.equal(matchesSelector(nodes[3], { text: '确认', enabled: true }), false);
 assert.equal(matchesSelector(nodes[4], { textContains: '鸿蒙' }), true);
+assert.deepEqual(describeLayout({ totalNodes: 5, truncated: false }), { treeQuality: 'full', fallback: 'none', customRendered: false, warnings: [] });
+assert.equal(describeLayout({ totalNodes: 5, truncated: true }).treeQuality, 'partial');
+assert.equal(describeLayout({ totalNodes: 0, truncated: false }).treeQuality, 'empty');
 assert.deepEqual(flattenLayout({ children: [] }), []);
 assert.equal(flattenLayout([layout]).length, 5);
 assert.equal(flattenLayout({ windows: [layout] }).length, 5);
@@ -32,6 +35,19 @@ assert.equal(flattenLayout({ attributes: { bounds: '[20,0][10,10]' } })[0].bound
 assert.throws(() => flattenLayout(null), /JSON object/);
 for (const selector of [{}, [], null, { unknown: 'value' }, { clickable: 'true' }, { text: '' }]) assert.throws(() => validateSelector(selector));
 validateSelector({ text: '确认', clickable: true });
+
+const semanticMarker = flattenLayout({ attributes: {
+  id: 'map-stop-stop_123',
+  type: 'Button',
+  bounds: '[900,280][1000,380]',
+  clickable: 'true',
+  enabled: 'true',
+  visible: 'true'
+} })[0];
+assert.equal(matchesSelector(semanticMarker, { id: 'map-stop-stop_123', type: 'Button', clickable: true, enabled: true }), true,
+  'semantic map markers must be discoverable by stable stop ID');
+assert.equal(requireTapTarget({ totalMatches: 1, matches: [semanticMarker], observedAt: Date.now() }), semanticMarker,
+  'semantic map markers must be valid tap targets');
 
 const tapFound = { totalMatches: 1, matches: [nodes[1]], observedAt: Date.now() };
 assert.equal(requireTapTarget(tapFound), nodes[1], 'the helper must return the original unique node');

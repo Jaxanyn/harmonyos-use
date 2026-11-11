@@ -4,3 +4,7 @@ node_modules/
 *.log
 coverage/
 dist/
+experiments/capture-probe/.hvigor/
+experiments/capture-probe/entry/.cxx/
+experiments/capture-probe/entry/build/
+experiments/capture-probe/**/oh_modules/

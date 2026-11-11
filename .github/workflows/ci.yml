@@ -29,6 +29,10 @@ jobs:
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci
+      - if: matrix.node == '20.x'
+        run: npm ci
+      - if: matrix.node == '22.x'
+        run: npm ci --engine-strict
       - run: npm run check
+      - run: npm run check:browser
       - run: npm pack --dry-run

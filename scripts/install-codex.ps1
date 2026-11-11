@@ -42,8 +42,9 @@ if ($nodeVersion -notmatch '^v(\d+)\.') { throw "Unable to read Node.js version:
 if ([int]$Matches[1] -lt 20) { throw "Node.js 20 or newer is required; found $nodeVersion" }
 
 $devices = @()
+$hdc = if ($HdcCommand) { Resolve-Executable $HdcCommand } else { $null }
 if (!$SkipDeviceCheck) {
-  $hdc = if ($HdcCommand) { Resolve-Executable $HdcCommand } else { Resolve-Executable 'hdc' }
+  if (!$hdc) { $hdc = Resolve-Executable 'hdc' }
   $hdcOutput = & $hdc 'list' 'targets'
   if ($LASTEXITCODE -ne 0) { throw "HDC device discovery failed: $hdcOutput" }
   $devices = @($hdcOutput | ForEach-Object { $_.ToString().Trim() } | Where-Object { $_ -and $_ -ne '[Empty]' -and $_ -notmatch '^\[.*\]$' })
@@ -71,6 +72,7 @@ if ($LASTEXITCODE -eq 0 -and !$Force) {
 if ($LASTEXITCODE -eq 0 -and $Force) { Invoke-Checked $codex @('mcp', 'remove', $Name) }
 
 $mcpArguments = @('mcp', 'add', $Name, '--env', "HARMONY_PROJECT=$project")
+if ($hdc) { $mcpArguments += @('--env', "HDC=$hdc") }
 if ($PreviewUrl) { $mcpArguments += @('--env', "HARMONY_PREVIEW_URL=$PreviewUrl") }
 if ($AutoStartPreview) { $mcpArguments += @('--env', 'HARMONY_PREVIEW_AUTOSTART=1') }
 $mcpArguments += @('--', $node, $entry, '--mcp')

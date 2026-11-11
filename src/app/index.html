@@ -7,26 +7,77 @@
     <style>
       :root { color-scheme: dark; font: 14px system-ui, sans-serif; }
       * { box-sizing: border-box; }
-      body { margin: 0; min-height: 100vh; background: #101318; color: #f4f6fa; }
-      header { padding: 16px 18px 12px; border-bottom: 1px solid #2b313b; }
+      body { margin: 0; height: 100vh; height: 100dvh; max-height: var(--preview-host-max-height, none); min-height: 0; padding: max(env(safe-area-inset-top, 0px), var(--preview-safe-top, 0px)) max(env(safe-area-inset-right, 0px), var(--preview-safe-right, 0px)) max(env(safe-area-inset-bottom, 0px), var(--preview-safe-bottom, 0px)) max(env(safe-area-inset-left, 0px), var(--preview-safe-left, 0px)); display: flex; flex-direction: column; background: #101318; color: #f4f6fa; }
+      header { flex: none; padding: 16px 18px 12px; border-bottom: 1px solid #2b313b; }
       h1 { margin: 0; font-size: 18px; }
       p { margin: 6px 0 0; color: #aeb8c8; }
-      main { display: grid; gap: 12px; padding: 12px; min-width: 0; }
-      .toolbar { display: flex; gap: 8px; flex-wrap: wrap; }
-      select, button { min-height: 34px; border: 1px solid #3b4554; border-radius: 6px; background: #202733; color: #f4f6fa; padding: 7px 10px; }
-      button { cursor: pointer; }
-      button:hover { background: #2b3544; }
-      button:disabled { cursor: wait; opacity: .55; }
-      .frame { position: relative; min-height: clamp(320px, 76vh, 820px); display: grid; place-items: center; background: #050608; border: 1px solid #2b313b; border-radius: 8px; overflow: auto; }
-      img { display: block; max-width: 100%; max-height: 76vh; width: auto; height: auto; object-fit: contain; cursor: crosshair; transform-origin: center; }
+      #status { height: 20px; line-height: 20px; overflow: auto; overflow-wrap: anywhere; }
+      #status:focus-visible { outline: 2px solid #75e0aa; outline-offset: 2px; }
+      main { flex: 1; display: grid; grid-template-rows: auto minmax(120px, 1fr); gap: 12px; padding: 12px; min-width: 0; min-height: 0; overflow-y: auto; }
+      .toolbar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+      .device-controls, .action-controls, .navigation-controls, .view-controls { display: flex; align-items: center; gap: 4px; min-width: 0; }
+      .device-controls { flex: 1 1 170px; max-width: 240px; }
+      .device-controls select { flex: 1; min-width: 0; width: 100%; }
+      select, button { min-height: 36px; border: 1px solid #3b4554; border-radius: 8px; background: #202733; color: #f4f6fa; font: inherit; }
+      select { padding: 0 8px; }
+      button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; padding: 0 10px; cursor: pointer; white-space: nowrap; }
+      button svg { width: 15px; height: 15px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+      button:hover { filter: brightness(1.16); }
+      button:active { transform: scale(.97); }
+      button:focus-visible, select:focus-visible { outline: 2px solid #75e0aa; outline-offset: 2px; }
+      button:disabled, select:disabled { cursor: default; opacity: .55; transform: none; }
+      .primary-action { background: #75e0aa; border-color: #75e0aa; color: #101318; font-weight: 600; }
+      .icon-button { width: 36px; padding: 0; flex: none; }
+      .navigation-controls, .view-controls { padding: 2px; gap: 0; border: 1px solid #2b313b; border-radius: 9px; }
+      .view-controls { margin-left: auto; }
+      .precise-controls { flex: 1 1 100%; }
+      .precise-controls summary { cursor: pointer; color: #aeb8c8; }
+      .precise-fields { display: flex; flex-wrap: wrap; align-items: end; gap: 6px; padding-top: 6px; }
+      .precise-fields label { display: grid; gap: 2px; font-size: 12px; }
+      .precise-fields input { width: 72px; min-height: 36px; padding: 0 6px; border: 1px solid #3b4554; border-radius: 8px; background: #202733; color: #f4f6fa; font: inherit; }
+      .navigation-controls button, .view-controls button { min-height: 30px; border: 0; border-radius: 6px; background: transparent; }
+      .navigation-controls .icon-button, .view-controls .icon-button { width: 32px; }
+      @media (max-width: 760px) {
+        .build-action .button-label { display: none; }
+        .build-action { width: 36px; padding: 0; }
+      }
+      @media (max-width: 540px) {
+        .device-controls { max-width: none; }
+        header { padding: 10px 12px 8px; }
+        .hint { display: none; }
+      }
+      @media (max-width: 390px) {
+        .toolbar { gap: 6px; }
+        .device-controls { flex-basis: 120px; }
+        #start, #stop { width: 36px; padding: 0; }
+        #start .button-label, #stop .button-label { display: none; }
+      }
+      @media (max-height: 500px) {
+        header { padding: 10px 12px 8px; }
+        .hint { display: none; }
+        main { gap: 8px; padding: 8px; }
+      }
+      .frame { position: relative; min-width: 0; min-height: 0; display: flex; background: #171d26; overflow: hidden; }
+      .frame:fullscreen { width: 100%; height: 100%; border: 0; border-radius: 0; }
+      #exit-fullscreen { position: fixed; top: 8px; right: 8px; z-index: 3; background: #202733ee; }
+      #fullscreen-status { position: fixed; top: 8px; left: 8px; z-index: 2; max-width: calc(100% - 160px); max-height: calc(100% - 16px); overflow: hidden; overflow-wrap: anywhere; padding: 6px 8px; border-radius: 6px; background: #202733ee; color: #fff; pointer-events: none; }
+      #fullscreen-status[hidden] { display: none; }
+      img { display: block; flex: none; width: auto; height: auto; max-width: none; max-height: none; margin: auto; box-shadow: 0 0 0 1px #303946; cursor: crosshair; }
       img[hidden] { display: none; }
       .overlay { position: absolute; inset: 0; display: grid; place-items: center; padding: 20px; color: #aeb8c8; background: #050608cc; pointer-events: none; text-align: center; }
       .overlay[hidden] { display: none; }
+      .stale-notice { position: absolute; z-index: 1; top: 10px; left: 50%; transform: translateX(-50%); padding: 6px 10px; border-radius: 6px; background: #222d; color: #fff; pointer-events: none; text-align: center; }
+      .stale-notice[hidden] { display: none; }
+      button[hidden] { display: none; }
       .gesture-marker { position: absolute; width: 18px; height: 18px; margin: -9px 0 0 -9px; border: 2px solid #75e0aa; border-radius: 50%; box-shadow: 0 0 0 6px #75e0aa33; pointer-events: none; animation: marker-pulse .45s ease-out forwards; }
       .gesture-marker[hidden] { display: none; }
       @keyframes marker-pulse { from { opacity: 1; transform: scale(.7); } to { opacity: 0; transform: scale(1.45); } }
       .metrics { margin: 0; color: #8f9bad; font-size: 12px; min-height: 16px; }
+      .diagnostics summary { cursor: pointer; }
+      .diagnostics-content { height: 110px; overflow-y: auto; }
+      .diagnostics-content p { margin: 4px 0; }
       .status { color: #75e0aa; }
+      .neutral { color: #aeb8c8; }
       .error { color: #ff9d9d; }
       .hint { font-size: 12px; }
     </style>
@@ -34,27 +85,54 @@
   <body>
     <header>
       <h1>HarmonyOS Preview</h1>
-      <p id="status" class="status" aria-live="polite">Connecting to Codex…</p>
+      <p id="status" class="status" aria-live="polite" tabindex="0">Connecting to Codex…</p>
       <p class="hint">Click the device image to send a tap. Drag to swipe.</p>
     </header>
     <main>
       <div class="toolbar">
-        <select id="devices" aria-label="Device"><option value="">No device selected</option></select>
-        <button id="refresh" type="button">Refresh devices</button>
-        <button id="build" type="button">Build · Install · Run</button>
-        <button id="start" type="button">Start preview</button>
-        <button id="stop" type="button">Stop preview</button>
-        <button id="fit" type="button">Fit</button>
-        <button id="zoom-out" type="button" aria-label="Zoom out">Zoom −</button>
-        <button id="zoom-in" type="button" aria-label="Zoom in">Zoom +</button>
-        <button id="fullscreen" type="button">Fullscreen</button>
+        <div class="device-controls" role="group" aria-label="Device controls">
+          <select id="devices" aria-label="Device"><option value="">No device selected</option></select>
+          <button id="refresh" class="icon-button" type="button" aria-label="Refresh devices" title="Refresh devices"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 7v5h-5M4 17v-5h5"/><path d="M5.5 9a7 7 0 0 1 11.6-2L20 12M4 12l2.9 5a7 7 0 0 0 11.6-2"/></svg></button>
+        </div>
+        <button id="build" class="build-action" type="button" aria-label="Build, install, and run" title="Build, install, and run"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 7 5 5-5 5M12 18h8"/></svg><span class="button-label">Build · Install · Run</span></button>
+        <div class="action-controls" role="group" aria-label="Preview actions">
+          <button id="start" class="primary-action" type="button" aria-label="Start preview" title="Start preview"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m8 5 11 7-11 7z"/></svg><span class="button-label">Start</span></button>
+          <button id="stop" type="button" aria-label="Stop preview" title="Stop preview"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2"/></svg><span class="button-label">Stop</span></button>
+          <button id="retry-frame" type="button" hidden>Retry frame</button>
+        </div>
+        <div class="navigation-controls" role="group" aria-label="Device navigation">
+          <button id="nav-back" class="icon-button" type="button" aria-label="Back" title="Back"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10 6 4 12l6 6M4 12h16"/></svg></button>
+          <button id="nav-home" class="icon-button" type="button" aria-label="Home" title="Home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m4 11 8-7 8 7M6 10v9h12v-9M10 19v-5h4v5"/></svg></button>
+        </div>
+        <div class="view-controls" role="group" aria-label="View controls">
+          <button id="fit" type="button" title="Fit to view">Fit</button>
+          <button id="zoom-out" class="icon-button" type="button" aria-label="Zoom out" title="Zoom out"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14"/></svg></button>
+          <button id="zoom-in" class="icon-button" type="button" aria-label="Zoom in" title="Zoom in"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M12 5v14"/></svg></button>
+          <button id="fullscreen" class="icon-button" type="button" aria-label="Fullscreen" title="Fullscreen"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></button>
+        </div>
+        <details id="precise-control" class="precise-controls">
+          <summary>Precise controls (not mouse input)</summary>
+          <p>Enter percentages from 0 up to, but not including, 100. Bind the displayed frame, then confirm the target before sending.</p>
+          <div class="precise-fields">
+            <label>Start X (%)<input id="precise-start-x" type="number" min="0" max="100" step="any"></label>
+            <label>Start Y (%)<input id="precise-start-y" type="number" min="0" max="100" step="any"></label>
+            <label>End X (%)<input id="precise-end-x" type="number" min="0" max="100" step="any"></label>
+            <label>End Y (%)<input id="precise-end-y" type="number" min="0" max="100" step="any"></label>
+            <button id="precise-bind" type="button">Bind displayed frame</button>
+            <button id="precise-tap" type="button">Send precise tap</button>
+            <button id="precise-swipe" type="button">Send precise swipe</button>
+          </div>
+        </details>
       </div>
       <div id="frame-shell" class="frame">
+        <button id="exit-fullscreen" type="button" hidden aria-label="Exit fullscreen" title="Exit fullscreen">Exit fullscreen</button>
+        <div id="fullscreen-status" role="status" aria-live="polite" hidden></div>
+        <div id="stale-notice" class="stale-notice" role="status" hidden>Old frame — interaction unavailable</div>
         <div id="stage-overlay" class="overlay"><span id="overlay-text">Waiting for first frame</span></div>
         <div id="gesture-marker" class="gesture-marker" hidden></div>
-        <img id="stage" alt="HarmonyOS device preview" hidden>
+        <img id="stage" alt="HarmonyOS device preview" draggable="false" hidden>
       </div>
-      <p id="metrics" class="metrics">No frame yet</p>
+      <div class="metrics" hidden><p id="metrics">No frame yet</p><details class="diagnostics"><summary>Action diagnostics and session statistics</summary><div class="diagnostics-content" tabindex="0" aria-label="Action diagnostics"><p id="action-metrics">No action measured yet.</p><p id="action-summary">Session samples: none.</p><p id="action-cancellations">Recent cancellations: none.</p></div></details></div>
     </main>
     <!-- APP_SCRIPT -->
   </body>

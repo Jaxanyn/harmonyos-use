@@ -17,7 +17,7 @@
   "bin": {
     "harmonyos-preview": "bin/harmonyos-preview.mjs"
   },
-  "description": "面向 AI 编程 Agent 的 HarmonyOS 真机与模拟器实时预览及交互插件。",
+  "description": "HarmonyOS Use：面向 AI 编程 Agent 的 HarmonyOS 真机与模拟器实时预览及交互插件。",
   "scripts": {
     "start": "node src/server.mjs",
     "check": "node --check src/server.mjs && node --check src/mcp.mjs && node --check scripts/check-codex.mjs && node test/smoke.mjs && node test/mcp.mjs && node test/external-preview.mjs && node test/package.mjs && node test/build.mjs && node test/phase1.mjs && node test/install.mjs",
@@ -25,7 +25,7 @@
   },
   "repository": {
     "type": "git",
-    "url": "https://github.com/Jaxanyn/harmonyos-preview.git"
+    "url": "https://github.com/Jaxanyn/harmonyos-use.git"
   },
   "engines": {
     "node": ">=20"

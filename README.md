@@ -3,17 +3,17 @@
 [![CI](https://github.com/Jaxanyn/harmonyos-use/actions/workflows/ci.yml/badge.svg)](https://github.com/Jaxanyn/harmonyos-use/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-HarmonyOS Use 是面向 Codex 等 AI 编程 Agent 的 HarmonyOS 真机预览与交互 MCP 插件。它把设备发现、构建安装、控件树、截图、实时预览和受控操作放进同一条工作流。
+HarmonyOS Use 是面向 Codex 等 AI 编程 Agent 的 MCP 插件，用于预览和操作 HarmonyOS 真机及模拟器。
 
 项目原名为 harmonyos-preview。为兼容现有安装和配置，npm 包名、命令、MCP 注册名及环境变量暂时保留原名；预览面板仍显示为 HarmonyOS Preview。
 
 ## 为什么用它
 
-- **看懂页面**：读取 UITest 控件树，按文字、ID、类型和状态查找目标。
-- **验证改动**：构建、安装、启动应用，并用新截图和 `wait_for` 验证页面变化。
-- **实时预览**：通过 MCP App 或本地 WebSocket 查看设备画面；重复帧不会进入模型上下文，点击后会等待动作产生的新帧。
-- **安全操作**：优先按控件重新查询后点击；坐标操作可绑定 `frameId`/`seq`，旧帧、歧义目标、禁用控件和无效坐标会被拒绝，预览坐标会按帧尺寸安全映射到设备像素。
-- **适配断连**：设备短暂离线时保留会话，恢复连接后继续预览。
+- **查看页面**：读取 UITest 控件树，按文字、ID、类型和状态查找目标。
+- **验证应用**：构建、安装并启动应用，通过截图和 `wait_for` 验证页面变化。
+- **实时预览**：通过 MCP App 或 WebSocket 查看画面，点击后请求新帧，重复帧不进入模型上下文。
+- **安全操作**：优先重新查找控件；坐标操作可绑定 `frameId`/`seq` 并校验旧帧。歧义目标、禁用控件和无效坐标会被拒绝，预览坐标按帧尺寸映射到设备像素。
+- **断线恢复**：设备短暂离线时保留会话，恢复连接后继续预览。
 
 ## 快速开始
 
@@ -86,8 +86,8 @@ MCP 请求支持并发；同一 MCP 进程内，同一设备上的点击、输�
 | `HARMONY_PREVIEW_URL` | 复用已独立启动的预览服务 |
 | `HARMONY_PREVIEW_AUTOSTART=1` | 预览服务不可用时自动拉起本机服务 |
 | `HARMONY_PREVIEW_HDC_TIMEOUT_MS` | 单次 HDC 命令超时，默认 15000 毫秒 |
-| `HARMONY_PREVIEW_ACTION_PREPARE_TIMEOUT_MS` | 点击前暂停预览采集的握手等待，默认 1000 毫秒，范围 5–5000；超时不执行点击 |
-| `HARMONY_PREVIEW_SCALE` | JPEG 预览采样比例，默认 0.75，范围 0.25–1；首帧仍保留设备原始尺寸 |
+| `HARMONY_PREVIEW_ACTION_PREPARE_TIMEOUT_MS` | 点击前暂停预览采集的握手等待，默认 1000 毫秒，范围 5 至 5000；超时不执行点击 |
+| `HARMONY_PREVIEW_SCALE` | JPEG 预览采样比例，默认 0.75，范围 0.25 至 1；首帧仍保留设备原始尺寸 |
 | `HARMONY_PREVIEW_FAST_TAP` | 可选，仅对值精确匹配的 HDC 设备 ID 启用预览快速点击；未设置时使用标准点击 |
 | `HARMONY_PREVIEW_FAST_SWIPE` | 实验性；仅对值精确匹配的 HDC 设备 ID 启用预览快速滑动，未设置时使用标准滑动 |
 

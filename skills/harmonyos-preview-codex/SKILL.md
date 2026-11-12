@@ -1,11 +1,11 @@
 ---
 name: harmonyos-preview-codex
-description: Use the HarmonyOS Preview MCP tools from Codex to build, run, observe and interact with a HarmonyOS app on a connected device.
+description: Use HarmonyOS Use MCP tools from Codex to build, run, observe and interact with a HarmonyOS app on a connected device.
 ---
 
-# HarmonyOS Preview in Codex
+# HarmonyOS Use in Codex
 
-Use this workflow when the user asks to run or inspect a HarmonyOS project in a connected device, or asks to open HarmonyOS Preview in Codex.
+Use this workflow when the user asks to run or inspect a HarmonyOS project on a connected device, or asks to open the HarmonyOS Preview panel in Codex. The project was previously named harmonyos-preview; its existing MCP registration and commands retain that name for compatibility.
 
 ## Required workflow
 

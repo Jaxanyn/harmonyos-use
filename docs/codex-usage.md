@@ -1,5 +1,7 @@
 # Codex 使用说明
 
+HarmonyOS Use 原名 harmonyos-preview。为兼容已有配置，MCP 注册名、命令及环境变量仍使用原名；预览面板名称仍为 HarmonyOS Preview。
+
 ## 安装 MCP
 
 建议使用 Node.js 22 安装并运行插件。项目目前声明 Node.js 20+，但上游依赖 `@openai/mcp-extensions@0.1.0` 声明 Node.js 22+；使用 Node.js 20 时，npm 默认安装可能提示 `EBADENGINE`，开启 `engine-strict` 时会因该依赖拒绝安装。可先检查当前版本和严格检查配置：
@@ -36,8 +38,10 @@ HDC 不在 `PATH` 时，明确指定可执行文件：
 ```powershell
 codex mcp add harmonyos-preview `
   --env HARMONY_PROJECT=C:\path\to\my-harmonyos-project `
-  -- node "C:\path\to\harmonyos-preview\bin\harmonyos-preview.mjs" --mcp
+  -- node "C:\path\to\harmonyos-use\bin\harmonyos-preview.mjs" --mcp
 ```
+
+将示例中的仓库目录替换为实际路径；已有目录无需改名。
 
 如需让预览服务独立于 MCP 进程运行，先启动：
 

@@ -384,8 +384,14 @@ export async function startMcp({ input = process.stdin, output = process.stdout,
       });
       if (tool.name === 'preview_start') return textResult(await withPreviewLifecycle(signal, () => startPreviewSubscription(args, { signal })));
       if (tool.name === 'preview_stop') return textResult(await withPreviewLifecycle(signal, () => stopPreviewSubscription(args)));
+      const captureStartedAt = performance.now();
       const frame = await deviceAdapter.capture({ deviceId: args.deviceId }, { signal });
-      return imageResult(frame.data, frame.mimeType, frameMetadata(frame, args.deviceId));
+      const captureMs = Math.max(0, Math.round(performance.now() - captureStartedAt));
+      const captureStages = Object.fromEntries(['combinedMs', 'snapshotMs', 'transferMs', 'readMs']
+        .filter((key) => Number.isFinite(frame.captureTiming?.[key]) && frame.captureTiming[key] >= 0)
+        .map((key) => [key, frame.captureTiming[key]]));
+      return imageResult(frame.data, frame.mimeType, { ...frameMetadata(frame, args.deviceId),
+        metrics: { captureMs, ...(Object.keys(captureStages).length ? { captureStages } : {}) } });
     } catch (error) {
       if (signal?.aborted) throw cancellationError();
       const errorCode = tool.name === 'capture' ? 'CAPTURE_FAILED' : tool.name === 'list_devices' ? 'HDC_FAILED'

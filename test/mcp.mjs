@@ -33,6 +33,8 @@ let lastInputArgs;
 let tapElementError;
 let tapElementCalls = 0;
 let frameRotation = null;
+let captureDelayMs = 0;
+let captureTiming;
 const node = { id: 'search', text: '搜索', type: 'Button', clickable: true, enabled: true,
   bounds: { left: 0, top: 0, right: 100, bottom: 50 }, center: { x: 50, y: 25 } };
 const running = startMcp({ input, output, port: 0, projectPath: '', previewTimeoutMs: 200, deviceAdapter: {
@@ -40,12 +42,13 @@ const running = startMcp({ input, output, port: 0, projectPath: '', previewTimeo
   capture: async ({ deviceId }, options) => {
     captured += 1;
     captureOptions = options;
+    if (captureDelayMs) await new Promise((resolve) => setTimeout(resolve, captureDelayMs));
     if (offline || deviceId === 'disconnected') throw tagError(new Error('device disconnected'), 'DEVICE_OFFLINE', 'capture');
     if (deviceId === 'png-device') return { mimeType: 'image/png', data: Buffer.from([0x89, 0x50, 0x4e, 0x47]) };
     if (deviceId === 'landscape-device') return { mimeType: 'image/jpeg', data: frameData, width: 200, height: 100, deviceWidth: 400, deviceHeight: 200 };
     if (deviceId === 'changed-device') return { mimeType: 'image/jpeg', data: frameData, width: 100, height: 200, deviceWidth: 200, deviceHeight: 400, orientationChanged: true };
     return { mimeType: 'image/jpeg', data: frameData, width: 100, height: 200, deviceWidth: 200, deviceHeight: 400,
-      ...(frameRotation === null ? {} : { rotation: frameRotation }) };
+      ...(frameRotation === null ? {} : { rotation: frameRotation }), ...(captureTiming ? { captureTiming } : {}) };
   },
   observe: async (args) => {
     layoutCalls += 1;
@@ -170,9 +173,19 @@ try {
   discoveryError = null;
   const devices = await request('tools/call', { name: 'list_devices' });
   assert.deepEqual(JSON.parse(devices.result.content[0].text), { devices: ['test-device'] });
+  captureDelayMs = 40;
+  captureTiming = { combinedMs: 30, snapshotMs: 9, transferMs: 2, readMs: 0, secret: 'must-not-leak', invalid: -1 };
   const image = await request('tools/call', { name: 'capture', arguments: { deviceId: 'test-device' } });
+  assert.ok(image.result.structuredContent.metrics.captureMs >= 30, 'capture duration must include waiting for the adapter');
+  assert.deepEqual(image.result.structuredContent.metrics.captureStages, { combinedMs: 30, snapshotMs: 9, transferMs: 2, readMs: 0 });
+  captureDelayMs = 0;
   assert.deepEqual(image.result.content[0], { type: 'image', mimeType: 'image/jpeg', data: '/9j/' });
   assertFreshImage(image.result, 'test-device');
+  captureTiming = { combinedMs: -1, snapshotMs: NaN, transferMs: '3', readMs: Infinity };
+  const invalidTiming = await request('tools/call', { name: 'capture', arguments: { deviceId: 'test-device' } });
+  assert.equal(invalidTiming.result.structuredContent.metrics.captureStages, undefined, 'invalid stage values must be omitted');
+  assert.ok(Number.isFinite(invalidTiming.result.structuredContent.metrics.captureMs));
+  captureTiming = undefined;
   const observed = await request('tools/call', { name: 'observe', arguments: { deviceId: 'test-device', maxNodes: 20 } });
   assert.deepEqual(observed.result.structuredContent.nodes, [node]);
   assert.equal(observed.result.structuredContent.treeQuality, 'full');

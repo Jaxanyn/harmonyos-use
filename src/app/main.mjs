@@ -1,5 +1,6 @@
 const parentWindow = window.parent;
 const pending = new Map();
+const maxDiagnosticPixels = 2048 * 2048;
 let nextRequestId = 0;
 
 const status = document.querySelector('#status');
@@ -129,6 +130,12 @@ function recordAction(label, outcome, message, timings, reason) {
           diagnostic.pixels.fullScanStopReason = pixels.fullScan.stopReason;
           if (action === 'tap' && ['pixel_extent', 'pixel_count'].includes(safeReason)) {
             diagnostic.pixels.targetMarginChanged = typeof pixels.fullScan.targetMarginChanged === 'boolean' ? pixels.fullScan.targetMarginChanged : null;
+            if (pixels.fullScan.stopReason === 'limit_exceeded' && pixels.fullScan.targetMarginChanged === false && typeof pixels.fullScan.exactCountComplete === 'boolean') {
+              const count = pixels.fullScan.exactChangedPixels;
+              const valid = pixels.fullScan.exactCountComplete && Number.isSafeInteger(count) && count >= 0 && count <= maxDiagnosticPixels;
+              diagnostic.pixels.exactCountComplete = valid;
+              diagnostic.pixels.exactChangedPixels = valid ? count : null;
+            }
           }
         }
         const regions = pixels.regionSummary?.regions;
@@ -760,15 +767,15 @@ function summarizeChangedRegions(changes, width, height) {
 }
 
 // shortcut: pixel comparison cannot detect invisible input overlays; use semantic UI state when available.
-function allowsTwoSmallRegions(changes, width, height, from, target) {
+function allowsSmallRegions(changes, width, height, from, target, tap = false) {
   if (!Number.isInteger(width) || !Number.isInteger(height) || width < 1 || height < 1 ||
       ![from?.x, from?.y, target?.x, target?.y].every(Number.isFinite) ||
       [from, target].some((point) => point.x < 0 || point.x >= width || point.y < 0 || point.y >= height)) return false;
   const limit = Math.floor(width * height * 0.0015);
   const margin = Math.min(width, height) * 0.05;
-  let regions = 0, totalArea = 0;
+  let regions = 0, totalArea = 0, noiseRegions = 0;
   while (changes.size) {
-    if (++regions > 2) return false;
+    if (++regions > (tap ? 3 : 2)) return false;
     const first = changes.values().next().value;
     changes.delete(first);
     const queue = [first];
@@ -788,8 +795,11 @@ function allowsTwoSmallRegions(changes, width, height, from, target) {
     }
     const w = right - left + 1, h = bottom - top + 1;
     totalArea += w * h;
-    if (count < 32 || w < 4 || h < 4 || w > width * 0.05 || h > height * 0.05 ||
-        Math.max(w, h) > Math.min(w, h) * 2 || count * 4 < w * h * 3 || totalArea > limit) return false;
+    if (tap && count <= 2 && w <= 2 && h <= 2) {
+      if (++noiseRegions > 1) return false;
+    } else if (count < 32 || w < 4 || h < 4 || w > width * 0.05 || h > height * 0.05 ||
+        Math.max(w, h) > Math.min(w, h) * 2 || (tap ? count * 5 : count * 4) < w * h * 3) return false;
+    if (totalArea > limit) return false;
     let enter = 0, exit = 1;
     for (const [start, end, min, max] of [[from.x, target.x, left - margin, right + margin],
       [from.y, target.y, top - margin, bottom + margin]]) {
@@ -805,7 +815,7 @@ function allowsTwoSmallRegions(changes, width, height, from, target) {
     }
     if (enter <= exit) return false;
   }
-  return regions === 2;
+  return tap ? regions === 2 + noiseRegions : regions === 2;
 }
 
 function scanTargetMargin(before, after, width, height, target, beforeWords, afterWords) {
@@ -827,6 +837,32 @@ function scanTargetMargin(before, after, width, height, target, beforeWords, aft
         before[i] !== after[i] || before[i + 1] !== after[i + 1] || before[i + 2] !== after[i + 2] || before[i + 3] !== after[i + 3]) return true;
     }
     return false;
+  } catch { return null; }
+}
+
+function countChangedPixels(before, after, width, height) {
+  try {
+    if (![width, height].every((value) => Number.isSafeInteger(value) && value > 0)) return null;
+    const pixels = width * height;
+    if (!Number.isSafeInteger(pixels) || pixels > maxDiagnosticPixels) return null;
+    const bytes = pixels * 4;
+    const valid = (data) => ArrayBuffer.isView(data) && data.length === bytes && data.byteLength === bytes &&
+      ['[object Uint8Array]', '[object Uint8ClampedArray]'].includes(Object.prototype.toString.call(data));
+    if (!valid(before) || !valid(after)) return null;
+    let beforeWords, afterWords;
+    if (before.byteOffset % 4 === 0 && after.byteOffset % 4 === 0) {
+      try {
+        beforeWords = new Uint32Array(before.buffer, before.byteOffset, pixels);
+        afterWords = new Uint32Array(after.buffer, after.byteOffset, pixels);
+      } catch { beforeWords = afterWords = undefined; }
+    }
+    let changed = 0;
+    for (let p = 0; p < pixels; p++) {
+      const i = p * 4;
+      if (beforeWords ? beforeWords[p] !== afterWords[p] : before[i] !== after[i] || before[i + 1] !== after[i + 1] ||
+          before[i + 2] !== after[i + 2] || before[i + 3] !== after[i + 3]) changed++;
+    }
+    return changed;
   } catch { return null; }
 }
 
@@ -868,13 +904,22 @@ function compatiblePixels(previous, current, target, from = target, action = '')
           }
           if (enter <= exit) pathMarginIntersection = true;
         }
-        if (exceeded) fullScan = { complete: false, stopReason: 'limit_exceeded',
-          ...(action === 'tap' && ['pixel_extent', 'pixel_count'].includes(reason)
-            ? { targetMarginChanged: scanTargetMargin(before, after, width, height, target, beforeWords, afterWords) } : {}) };
+        if (exceeded) {
+          fullScan = { complete: false, stopReason: 'limit_exceeded',
+            ...(action === 'tap' && ['pixel_extent', 'pixel_count'].includes(reason)
+              ? { targetMarginChanged: scanTargetMargin(before, after, width, height, target, beforeWords, afterWords) } : {}) };
+          if (fullScan.targetMarginChanged === false) {
+            const exactCount = countChangedPixels(before, after, width, height);
+            fullScan.exactCountComplete = exactCount !== null;
+            fullScan.exactChangedPixels = exactCount;
+          }
+        }
         else {
           fullScan = { complete: true, changedPixels: total, grid4x4, pathMarginIntersection };
-          if (action === 'swipe' && candidate && pathMarginIntersection === false && allowsTwoSmallRegions(candidate, width, height, from, target)) {
-            status.dataset.gesturePixelDiagnostic = JSON.stringify({ accepted: 'two_small_regions', fullScan });
+          if (candidate && pathMarginIntersection === false &&
+              (action === 'swipe' && allowsSmallRegions(candidate, width, height, from, target) ||
+               action === 'tap' && allowsSmallRegions(new Set(candidate), width, height, from, target, true))) {
+            status.dataset.gesturePixelDiagnostic = JSON.stringify({ accepted: action === 'swipe' ? 'two_small_regions' : 'two_small_regions_optional_noise', fullScan });
             gestureRejection = '';
             return true;
           }
@@ -1361,6 +1406,7 @@ frameShell.addEventListener('pointerdown', (event) => {
     return;
   }
   if (gesturePending) {
+    recordAction(undefined, 'canceled', 'Last gesture: canceled · another action pending · input not sent', undefined, 'another_action_pending');
     feedbackUntil = now() + 1500;
     setStatus('Previous action is still processing; please wait.');
     return;

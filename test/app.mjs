@@ -208,6 +208,7 @@ function createPanel({ autoPreflight = true, hostSubscriptionProtocol = 1, pixel
   return { elements, sent, timers, windowListeners, documentListeners, document: context.document, parent, hostStyles, pixelFrames, pixelViews, wordViews, take, reply, runPoll, runTimer, clickImage, resize,
     recordAction(...args) { context.recordAction(...args); },
     scanTargetMargin(...args) { return context.scanTargetMargin(...args); },
+    countChangedPixels(...args) { return context.countChangedPixels(...args); },
     getWordViewAttempts() { return wordViewAttempts; }, disableCanvas() { canvasUnavailable = true; }, advance(ms) { time += ms; } };
 }
 
@@ -429,6 +430,38 @@ for (const event of [{ button: 2 }, { button: 1 }, { isPrimary: false }]) {
   assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
 }
 
+// A second pointer press during an action is ignored and recorded without interrupting that action.
+{
+  const panel = await readyPanel({ autoPreflight: false });
+  await start(panel);
+  const seq = nextFrameSeq;
+  panel.clickImage(100, 100);
+  await flush();
+  const preflight = panel.take('preview_frame');
+  panel.clickImage(110, 110);
+  await flush();
+  assert.ok(panel.elements.status.dataset.lastCancellation, 'A blocked pointer press must be recorded');
+  assert.deepEqual(JSON.parse(panel.elements.status.dataset.lastCancellation), { action: 'gesture', reason: 'another_action_pending' });
+  assert.match(panel.elements['action-summary'].textContent, /unclassified canceled 1/);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'A second press must not dispatch device input');
+  panel.advance(7);
+  await panel.reply(preflight, { structuredContent: { deviceId: 'A', sessionId: 'session-A', connected: true, seq, frame: null } });
+  const action = panel.take('preview_action');
+  assert.equal(action.params.arguments.action, 'tap');
+  panel.clickImage(110, 110);
+  await flush();
+  assert.match(panel.elements['action-summary'].textContent, /unclassified canceled 2/);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Never repeat the in-flight action');
+  panel.advance(10);
+  await panel.reply(action, textResult({ metrics: { actionMs: 10, actionInputMs: 8, inputMethod: 'uinput', nextFrameAfterSeq: seq } }));
+  const postFrame = panel.take('preview_frame');
+  panel.advance(15);
+  await panel.reply(postFrame, imageResult('A'));
+  assert.match(panel.elements.metrics.title, /queue 0ms.*preflight 7ms.*input 8ms.*post-frame 15ms.*total 32ms/);
+  assert.match(panel.elements['action-summary'].textContent, /tap: n=1,.*canceled 0, failed\/unknown 0.*unclassified canceled 2/);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+}
+
 // Frame and action timings distinguish local waiting from device input.
 {
   const panel = await readyPanel({ autoPreflight: false });
@@ -574,6 +607,16 @@ for (const [stages, expected] of [
   panel.elements.status.dataset.gesturePixelDiagnostic = JSON.stringify({ fullScan: { complete: false, stopReason: 'limit_exceeded', targetMarginChanged: true } });
   panel.recordAction('swipe', 'canceled', '', undefined, 'pixel_extent');
   assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.targetMarginChanged, undefined, 'tap-only diagnostic must not leak into a swipe');
+  for (const count of [-1, 1.1, 4194305, 'sensitive']) {
+    panel.elements.status.dataset.gesturePixelDiagnostic = JSON.stringify({ fullScan: { complete: false, stopReason: 'limit_exceeded', targetMarginChanged: false, exactCountComplete: true, exactChangedPixels: count } });
+    panel.recordAction('tap', 'canceled', '', undefined, 'pixel_extent');
+    const pixels = JSON.parse(panel.elements.status.dataset.lastCancellation).pixels;
+    assert.equal(pixels.exactCountComplete, false);
+    assert.equal(pixels.exactChangedPixels, null);
+  }
+  panel.elements.status.dataset.gesturePixelDiagnostic = JSON.stringify({ fullScan: { complete: false, stopReason: 'scan_error', targetMarginChanged: false, exactCountComplete: true, exactChangedPixels: 1 } });
+  panel.recordAction('tap', 'canceled', '', undefined, 'pixel_extent');
+  assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.exactCountComplete, undefined);
 }
 
 // Host display modes are requested only when advertised; partial updates retain capabilities.
@@ -784,8 +827,8 @@ for (const [stages, expected] of [
   assert.match(panel.elements.status.textContent, /dimensions|calibrat/i);
 }
 
-// Two compact, separated changes may be ignored only for a swipe, and only
-// when both are safely away from the entire gesture path.
+// Two compact, separated changes may be ignored for a tap or swipe only when
+// both are safely away from the target or entire gesture path, respectively.
 for (const scenario of ['swipe', 'alpha', 'unaligned-alpha', 'unaligned-alpha-path', 'transparent-overlay-visual', 'precise-swipe', 'precise-tap', 'tap', 'back', 'home', 'line',
   'noise', 'third', 'pixel-over', 'area-over', 'path', 'endpoint', 'margin-edge', 'vertical-path', 'diagonal-path',
   'later-unsafe', 'no-canvas', 'rotation', 'session']) {
@@ -858,6 +901,8 @@ for (const scenario of ['swipe', 'alpha', 'unaligned-alpha', 'unaligned-alpha-pa
   // the authorized limitation of a guard based only on image differences.
   if (['swipe', 'alpha', 'unaligned-alpha', 'transparent-overlay-visual', 'precise-swipe'].includes(scenario)) {
     assert.equal(panel.take('preview_action').params.arguments.action, 'swipe', `${scenario} should be actionable`);
+  } else if (['tap', 'precise-tap'].includes(scenario)) {
+    assert.equal(panel.take('preview_action').params.arguments.action, 'tap', `${scenario} should be actionable`);
   } else {
     assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), `${scenario} must cancel`);
   }
@@ -867,15 +912,44 @@ for (const scenario of ['swipe', 'alpha', 'unaligned-alpha', 'unaligned-alpha-pa
 // Small localized changes far from the gesture must not prevent a tap, while
 // changes near its target or spanning the display still block it.
 for (const scenario of ['identical-pixels', 'small-far', 'target', 'alpha-target', 'guard-edge', 'guard-outside',
-  'area-edge', 'area-over', 'width-edge', 'width-over', 'height-edge', 'height-over', 'wide-line', 'large', 'large-target', 'large-guard-edge', 'large-guard-outside', 'large-unaligned', 'count-limit',
-  'dispersed', 'region-diagonal', 'region-many', 'no-canvas', 'scan-error', 'swipe-path', 'rotation', 'session', 'clock-far', 'status-dual', 'status-notification', 'status-map-distributed']) {
-  const panel = await readyPanel({ autoPreflight: false, failDiagnosticScan: scenario === 'scan-error', ...(scenario === 'large-unaligned' ? { pixelByteOffset: 1 } : {}) });
+  'area-edge', 'area-over', 'width-edge', 'width-over', 'height-edge', 'height-over', 'wide-line', 'large', 'large-target', 'large-guard-edge', 'large-guard-outside', 'large-unaligned', 'large-swipe', 'count-limit',
+  'dispersed', 'region-diagonal', 'region-many', 'no-canvas', 'scan-error', 'swipe-path', 'rotation', 'session', 'clock-far', 'status-dual', 'status-notification', 'status-map-distributed',
+  'clock-two', 'clock-two-near', 'clock-two-box-near', 'clock-two-swipe', 'clock-noise-pair', 'clock-noise-diagonal', 'clock-noise-precise', 'clock-noise-three', 'clock-noise-two-regions', 'clock-noise-near', 'clock-noise-box-near', 'clock-noise-swipe', 'clock-noise-limit', 'clock-noise-error', 'clock-three', 'clock-three-near', 'clock-three-box-near', 'clock-three-sparse', 'clock-three-large', 'clock-three-extra', 'clock-three-limit', 'clock-three-error', 'clock-three-swipe']) {
+  const panel = await readyPanel({ autoPreflight: false, failDiagnosticScan: ['scan-error', 'clock-three-error', 'clock-noise-error'].includes(scenario), ...(scenario === 'large-unaligned' ? { pixelByteOffset: 1 } : {}) });
   const testHeight = 1920;
   await start(panel, 'A', 1200, testHeight);
   const points = [];
   const fill = (left, top, right, bottom) => {
     for (let y = top; y < bottom; y += 1) for (let x = left; x < right; x += 1) points.push([x, y]);
   };
+  const region = (left, top, width, height, count, exclude = () => false) => {
+    const pixels = [];
+    for (let y = 0; y < height; y++) for (let x = 0; x < width; x++) {
+      if ((x === 0 || y === 0 || x === width - 1 || y === height - 1) && !exclude(left + x, top + y)) pixels.push([left + x, top + y]);
+    }
+    for (let y = 1; y < height - 1 && pixels.length < count; y++) for (let x = 1; x < width - 1 && pixels.length < count; x++) {
+      if (!exclude(left + x, top + y)) pixels.push([left + x, top + y]);
+    }
+    assert.equal(pixels.length, count);
+    points.push(...pixels);
+  };
+  if (scenario.startsWith('clock-three') || scenario.startsWith('clock-two') || scenario.startsWith('clock-noise')) {
+    if (scenario.endsWith('box-near') && !scenario.startsWith('clock-noise')) region(400, 280, 24, 24, 444, (x, y) => x <= 403 && y <= 286);
+    else if (scenario === 'clock-two-near') region(400, 200, 24, 24, 444);
+    else region(20, 20, 24, 24, scenario.startsWith('clock-noise') ? 393 : 444);
+    if (scenario === 'clock-three-large') region(1100, 20, 61, 16, 800);
+    else region(1100, 20, 16, 16, scenario === 'clock-three-sparse' ? 150 : scenario.startsWith('clock-noise') ? 199 : 165);
+    if (scenario === 'clock-noise-near') points.push([403, 226], [404, 226]);
+    else if (scenario === 'clock-noise-box-near') points.push([404, 286], [403, 287]);
+    else if (scenario === 'clock-noise-diagonal') points.push([700, 20], [701, 21]);
+    else if (scenario.startsWith('clock-noise')) points.push([700, 20], [701, 20]);
+    else if (!scenario.startsWith('clock-two')) points.push(scenario === 'clock-three-near' ? [403, 226] : [700, 20]);
+    if (scenario === 'clock-noise-three') points.push([702, 20]);
+    if (scenario === 'clock-noise-two-regions') points.push([750, 20]);
+    if (scenario === 'clock-noise-limit') fill(700, 900, 760, 960);
+    if (scenario === 'clock-three-extra') points.push([750, 20]);
+    if (scenario === 'clock-three-limit') fill(700, 900, 760, 960);
+  }
   if (['small-far', 'swipe-path', 'rotation', 'session'].includes(scenario)) fill(687, 463, 728, 513);
   if (scenario === 'target') fill(342, 225, 347, 230);
   if (scenario === 'alpha-target') points.push([343, 226, 3]);
@@ -908,9 +982,14 @@ for (const scenario of ['identical-pixels', 'small-far', 'target', 'alpha-target
   }
   panel.pixelFrames.set(`1200x${testHeight}`, []);
   panel.pixelFrames.set(`01200x${testHeight}`, points);
-  if (scenario === 'swipe-path') {
+  if (scenario === 'swipe-path' || scenario === 'large-swipe' || scenario === 'clock-two-swipe' || scenario === 'clock-three-swipe' || scenario === 'clock-noise-swipe') {
     panel.elements.stage.dispatch('pointerdown', { clientX: 50, clientY: 200, pointerId: 1 });
     panel.elements.stage.dispatch('pointerup', { clientX: 250, clientY: 200, pointerId: 1 });
+  } else if (scenario === 'clock-noise-precise') {
+    panel.elements['precise-start-x'].value = '28.6';
+    panel.elements['precise-start-y'].value = '11.8';
+    panel.elements['precise-bind'].dispatch('click');
+    panel.elements['precise-tap'].dispatch('click');
   } else if (scenario === 'clock-far') {
     panel.elements.stage.dispatch('pointerdown', { clientX: 20, clientY: 560, pointerId: 1 });
     panel.elements.stage.dispatch('pointerup', { clientX: 150, clientY: 560, pointerId: 1 });
@@ -924,10 +1003,16 @@ for (const scenario of ['identical-pixels', 'small-far', 'target', 'alpha-target
   if (scenario === 'session') newer.structuredContent.sessionId = 'other-session';
   if (scenario === 'no-canvas') panel.disableCanvas();
   await panel.reply(preflight, newer);
-  if (['identical-pixels', 'small-far', 'guard-outside', 'area-edge', 'width-edge', 'height-edge'].includes(scenario)) {
+  if (['identical-pixels', 'small-far', 'guard-outside', 'area-edge', 'width-edge', 'height-edge', 'clock-two', 'clock-noise-pair', 'clock-noise-diagonal', 'clock-noise-precise', 'clock-three'].includes(scenario)) {
     const action = panel.take('preview_action').params.arguments;
     assert.equal(action.action, 'tap', `${scenario} should be actionable`);
     assert.equal(action.frameId, newer.structuredContent.frame.frameId);
+    if (scenario === 'clock-two' || scenario === 'clock-three' || ['clock-noise-pair', 'clock-noise-diagonal', 'clock-noise-precise'].includes(scenario)) {
+      const diagnostic = JSON.parse(panel.elements.status.dataset.gesturePixelDiagnostic);
+      assert.equal(diagnostic.accepted, 'two_small_regions_optional_noise');
+      assert.equal(diagnostic.fullScan.changedPixels, scenario === 'clock-two' ? 609 : scenario === 'clock-three' ? 610 : 594);
+      assert.equal(diagnostic.fullScan.pathMarginIntersection, false);
+    }
   } else {
     assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), `${scenario} must not send an action`);
     if (scenario === 'width-over') {
@@ -958,10 +1043,21 @@ for (const scenario of ['identical-pixels', 'small-far', 'target', 'alpha-target
     }
     if (scenario === 'target') assert.equal(JSON.parse(panel.elements.status.dataset.gesturePixelDiagnostic).fullScan.pathMarginIntersection, true);
     if (scenario === 'swipe-path') assert.equal(JSON.parse(panel.elements.status.dataset.gesturePixelDiagnostic).fullScan.pathMarginIntersection, true);
-    if (scenario.startsWith('large')) {
+    if (scenario === 'large-swipe') {
+      const pixels = JSON.parse(panel.elements.status.dataset.lastCancellation).pixels;
+      assert.equal(pixels.fullScanStopReason, 'limit_exceeded');
+      assert.equal(pixels.exactCountComplete, undefined, 'Swipe must not run tap-only count');
+      assert.equal(pixels.exactChangedPixels, undefined);
+    } else if (scenario.startsWith('large')) {
       const saved = JSON.parse(panel.elements.status.dataset.lastCancellation);
       assert.equal(saved.pixels.fullScanStopReason, 'limit_exceeded');
       assert.equal(saved.pixels.targetMarginChanged, ['large-target', 'large-guard-edge'].includes(scenario));
+      if (['large-target', 'large-guard-edge'].includes(scenario)) {
+        assert.equal(saved.pixels.exactCountComplete, undefined, 'No whole-frame count when target area changed');
+      } else {
+        assert.equal(saved.pixels.exactCountComplete, true);
+        assert.equal(saved.pixels.exactChangedPixels, scenario === 'large-guard-outside' ? 22501 : 22500);
+      }
       assert.doesNotMatch(JSON.stringify(saved), /"x"|"y"|image|position/);
     }
     if (scenario === 'count-limit') {
@@ -969,10 +1065,31 @@ for (const scenario of ['identical-pixels', 'small-far', 'target', 'alpha-target
       assert.equal(saved.reason, 'pixel_count');
       assert.equal(saved.pixels.fullScanStopReason, 'limit_exceeded');
       assert.equal(saved.pixels.targetMarginChanged, false);
+      assert.equal(saved.pixels.exactCountComplete, true);
+      assert.equal(saved.pixels.exactChangedPixels, 3457);
     }
     if (scenario === 'scan-error') {
       assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.fullScanStopReason, 'scan_error');
     }
+    if (scenario === 'clock-three-error') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.fullScanStopReason, 'scan_error');
+    if (scenario === 'clock-three-limit') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.fullScanStopReason, 'limit_exceeded');
+    if (scenario === 'clock-noise-error') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.fullScanStopReason, 'scan_error');
+    if (scenario === 'clock-noise-limit') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.fullScanStopReason, 'limit_exceeded');
+    if (scenario === 'clock-noise-near') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, true);
+    if (scenario === 'clock-noise-box-near') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, false, 'Only the noise region box intersects the target guard');
+    if (scenario === 'clock-noise-swipe') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, false, 'The swipe noise must remain far from the path');
+    if (scenario === 'clock-three-near') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, true);
+    if (scenario === 'clock-three-box-near') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, false, 'The region box, not a changed pixel, intersects the target guard');
+    if (scenario === 'clock-two-near') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, true);
+    if (scenario === 'clock-two-box-near') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.pathMarginIntersection, false, 'The region box, not a changed pixel, intersects the target guard');
+    if (scenario === 'clock-two-swipe') {
+      const diagnostic = JSON.parse(panel.elements.status.dataset.gesturePixelDiagnostic);
+      assert.equal(diagnostic.fullScan.complete, true);
+      assert.equal(diagnostic.fullScan.changedPixels, 609);
+      assert.equal(diagnostic.fullScan.pathMarginIntersection, false);
+      assert.equal(diagnostic.accepted, undefined, 'A swipe must keep its 75% density threshold');
+    }
+    if (scenario === 'clock-three-sparse') assert.equal(JSON.parse(panel.elements.status.dataset.lastCancellation).pixels.regionSummary.regions.length, 3, 'Rejected click diagnostics remain available');
     if (scenario === 'dispersed') {
       const diagnostic = JSON.parse(panel.elements.status.dataset.gesturePixelDiagnostic);
       const scan = diagnostic.fullScan;
@@ -993,6 +1110,50 @@ for (const scenario of ['identical-pixels', 'small-far', 'target', 'alpha-target
     }
     if (scenario === 'area-over') assert.equal(JSON.parse(panel.elements.status.dataset.gesturePixelDiagnostic).regionSummary, undefined);
   }
+}
+
+// Over-budget rejected taps record an unknown count without changing the decision.
+{
+  const panel = await readyPanel({ autoPreflight: false });
+  await start(panel, 'A', 2049, 2048);
+  const points = [];
+  for (let y = 900; y < 980; y++) for (let x = 1200; x < 1280; x++) points.push([x, y]);
+  panel.pixelFrames.set('2049x2048', []);
+  panel.pixelFrames.set('02049x2048', points);
+  panel.clickImage(100, 100);
+  await flush();
+  const newer = imageResult('A', 2049, 2048);
+  newer.structuredContent.frame.data = '02049x2048';
+  await panel.reply(panel.take('preview_frame'), newer);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+  const pixels = JSON.parse(panel.elements.status.dataset.lastCancellation).pixels;
+  assert.equal(pixels.fullScanStopReason, 'limit_exceeded');
+  assert.equal(pixels.targetMarginChanged, false);
+  assert.equal(pixels.exactCountComplete, false);
+  assert.equal(pixels.exactChangedPixels, null);
+}
+
+// Whole-frame counts are exact, bounded, and fail closed for malformed data.
+{
+  const panel = createPanel();
+  const before = new Uint8Array(100 * 100 * 4), after = new Uint8Array(before.length);
+  after[1] = 1;
+  after[4 * 9999 + 3] = 1;
+  assert.equal(panel.countChangedPixels(before, after, 100, 100), 2);
+  assert.equal(panel.countChangedPixels(before, after.subarray(0, -1), 100, 100), null);
+  assert.equal(panel.countChangedPixels(new Int8Array(before.length), after, 100, 100), null);
+  const detached = new Uint8Array(before.length);
+  structuredClone(detached.buffer, { transfer: [detached.buffer] });
+  assert.equal(panel.countChangedPixels(detached, after, 100, 100), null);
+  const broken = new Uint8Array(before.length);
+  Object.defineProperty(broken, 'length', { get() { throw new Error('private detail'); } });
+  assert.equal(panel.countChangedPixels(broken, after, 100, 100), null);
+  assert.equal(panel.countChangedPixels(before, after, 0, 100), null);
+  let reads = 0;
+  const oversized = new Proxy({}, { get() { reads++; throw new Error('private detail'); } });
+  assert.equal(panel.countChangedPixels(oversized, oversized, 2049, 2048), null);
+  assert.equal(reads, 0, 'Over-budget frames must not access pixel data');
+  assert.equal(panel.countChangedPixels(new Proxy({}, { get() { throw new Error('private detail'); } }), after, 100, 100), null);
 }
 
 // Target-area diagnostics are bounded, exact at the image edge, and fail closed.

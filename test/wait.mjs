@@ -10,7 +10,7 @@ const page = (children = []) => node('root', '', children);
 const pause = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 let fixtureId = 0;
 
-function mockDevice({ layouts = [page()], failDumpAt, dumpDelayMs = 0, recvDelayMs = 0, targetListed = true } = {}) {
+function mockDevice({ layouts = [page()], failDumpAt, dumpDelayMs = 0, recvDelayMs = 0, recvTimeout = false, targetListed = true } = {}) {
   const calls = [];
   const outputDirectory = join(directory, String(fixtureId++));
   let attempts = 0;
@@ -25,6 +25,7 @@ function mockDevice({ layouts = [page()], failDumpAt, dumpDelayMs = 0, recvDelay
         currentLayout = layouts[Math.min(attempts - 1, layouts.length - 1)];
         if (failDumpAt === attempts) return { code: 1, stdout: '', stderr: 'device disconnected' };
       }
+      if (recvTimeout && args.includes('recv')) return { code: 124, stdout: '', stderr: 'command timed out' };
       const delayMs = args.includes('dumpLayout') ? dumpDelayMs : args.includes('recv') ? recvDelayMs : 0;
       if (delayMs) {
         await pause(Math.min(delayMs, options.timeoutMs));
@@ -130,11 +131,13 @@ try {
   assert.ok(dumpCall.options.timeoutMs > 0 && dumpCall.options.timeoutMs <= 20, 'dump must inherit the remaining wait budget');
   assert.ok(!slowDump.calls.some(({ args }) => args.includes('recv')), 'expired dump must not start a transfer');
 
-  const slowRecv = mockDevice({ dumpDelayMs: 15, recvDelayMs: 80 });
-  const slowRecvResult = await slowRecv.adapter.waitFor({ deviceId: 'test-device', selector: { id: 'ready' }, timeoutMs: 40 });
+  const slowRecv = mockDevice({ dumpDelayMs: 15, recvTimeout: true });
+  const slowRecvResult = await slowRecv.adapter.waitFor({ deviceId: 'test-device', selector: { id: 'ready' }, timeoutMs: 1000 });
   assertResult(slowRecvResult, 'timeout');
   const recvCall = slowRecv.calls.find(({ args }) => args.includes('recv'));
-  assert.ok(recvCall.options.timeoutMs > 0 && recvCall.options.timeoutMs < 40, 'transfer must use the budget left after dumping');
+  const recvDumpCall = slowRecv.calls.find(({ args }) => args.includes('dumpLayout'));
+  assert.ok(recvCall, 'transfer must start before its simulated timeout');
+  assert.ok(recvCall.options.timeoutMs > 0 && recvCall.options.timeoutMs < recvDumpCall.options.timeoutMs, 'transfer must use the budget left after dumping');
   assert.deepEqual(await readdir(slowRecv.outputDirectory), []);
   for (const fixture of [slowDump, slowRecv]) {
     assert.ok(fixture.calls.at(-1).args.includes('rm'));

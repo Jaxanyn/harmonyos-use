@@ -1,9 +1,11 @@
-# harmonyos-preview
+# harmonyos-use
 
-[![CI](https://github.com/Jaxanyn/harmonyos-preview/actions/workflows/ci.yml/badge.svg)](https://github.com/Jaxanyn/harmonyos-preview/actions/workflows/ci.yml)
+[![CI](https://github.com/Jaxanyn/harmonyos-use/actions/workflows/ci.yml/badge.svg)](https://github.com/Jaxanyn/harmonyos-use/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/Node.js-%3E%3D20-339933?logo=node.js&logoColor=white)](https://nodejs.org/)
 
-面向 Codex 等 AI 编程 Agent 的 HarmonyOS 真机预览与交互 MCP 插件。它把设备发现、构建安装、控件树、截图、实时预览和受控操作放进同一条工作流。
+HarmonyOS Use 是面向 Codex 等 AI 编程 Agent 的 HarmonyOS 真机预览与交互 MCP 插件。它把设备发现、构建安装、控件树、截图、实时预览和受控操作放进同一条工作流。
+
+项目原名为 harmonyos-preview。为兼容现有安装和配置，npm 包名、命令、MCP 注册名及环境变量暂时保留原名；预览面板仍显示为 HarmonyOS Preview。
 
 ## 为什么用它
 
@@ -19,7 +21,7 @@
 
 ```powershell
 hdc list targets
-cd "C:\path\to\harmonyos-preview"
+cd "C:\path\to\harmonyos-use"
 .\scripts\install-codex.ps1 -ProjectPath C:\path\to\my-harmonyos-project
 codex mcp get harmonyos-preview
 ```

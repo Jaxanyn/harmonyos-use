@@ -17,17 +17,18 @@ HarmonyOS Use 让 Codex 等 AI Agent 通过 MCP 预览和操作 HarmonyOS 真机
 
 ## 快速开始
 
-需要 Windows、Node.js 20+、DevEco Studio、HDC，以及已授权的 HarmonyOS 真机或已启动的模拟器。建议使用 Node.js 22：上游依赖 `@openai/mcp-extensions` 声明要求 Node.js 22+。Node.js 20 默认安装可能提示 `EBADENGINE`，启用 npm `engine-strict` 时安装会失败。详见[使用说明](docs/codex-usage.md)。
+需要 Windows、Codex CLI、Node.js 20+、DevEco Studio、HDC，以及已授权的 HarmonyOS 真机或已启动的模拟器。建议使用 Node.js 22：上游依赖 `@openai/mcp-extensions` 声明要求 Node.js 22+。Node.js 20 默认安装可能提示 `EBADENGINE`，启用 npm `engine-strict` 时安装会失败。详见[使用说明](docs/codex-usage.md)。
+
+HDC 在 `PATH` 中时，先运行 `hdc list targets` 检查设备。否则运行 `& "C:\path\to\hdc.exe" list targets`，并在下面的安装命令中追加 `-HdcCommand "C:\path\to\hdc.exe"`。将路径替换为实际位置。
 
 ```powershell
-hdc list targets
 cd "C:\path\to\harmonyos-use"
 npm ci
 .\scripts\install-codex.ps1 -ProjectPath C:\path\to\my-harmonyos-project
 codex mcp get harmonyos-preview
 ```
 
-HDC 不在 `PATH` 时，给安装脚本追加 `-HdcCommand "C:\path\to\hdc.exe"`。脚本会将检查过的完整路径写入 MCP 的 `HDC` 环境变量，路径可包含空格。
+新注册时，安装脚本会将检查过的 HDC 完整路径写入 MCP 的 `HDC` 环境变量，路径可包含空格。已有同名配置默认不覆盖；确认需要替换时追加 `-Force`。注册后刷新 MCP 工具列表或重启 Codex。
 
 然后在 Codex 中发送：
 
@@ -42,7 +43,7 @@ list_devices
   → preview_info(deviceId)
   → build_run（需要重装时）
   → preview_start
-  → preview_frame / capture
+  → capture
   → observe / find
   → tap_element / tap / swipe / input_text
   → wait_for
@@ -50,7 +51,7 @@ list_devices
   → preview_stop
 ```
 
-`preview_panel` 可在当前对话右侧打开 MCP App，提供设备返回、主页、Fit、Zoom 和 Fullscreen；普通 `previewUrl` 仍可用于浏览器调试。
+`preview_panel` 可打开 MCP App，提供设备返回、主页、Fit、Zoom 和 Fullscreen；首次显示位置由宿主决定。普通 `previewUrl` 仍可用于浏览器调试。
 
 ## MCP 能力
 
@@ -60,20 +61,20 @@ list_devices
 | 构建 | `build_run` | 构建、安装并启动应用 |
 | 观察 | `observe`, `find`, `wait_for` | 读取控件树、定位目标、等待页面变化 |
 | 截图 | `capture` | 每次重新采集设备画面，返回 `frameId` 和 `capturedAt` |
-| 预览 | `preview_start`, `preview_frame`, `preview_stop` | 启动、取帧、恢复和停止实时预览，并返回采集来源、耗时和帧大小指标 |
-| 操作 | `tap_element`, `tap`, `swipe`, `long_press`, `key_event`, `input_text` | 按控件或坐标操作设备；`tap_element` 可选 `verify` 自动确认点击后的控件状态 |
+| 预览 | `preview_start`, `preview_panel`, `preview_stop` | 启动、打开和停止预览；面板内部使用 `preview_frame` 取帧并返回采集指标 |
+| 操作 | `tap_element`, `tap`, `swipe`, `long_press`, `key_event`, `input_text` | 按控件或坐标操作设备；`tap_element` 可选 `verify` 等待预期控件状态 |
 
-多模块工程可给 `build_run` 传入 `moduleName`；存在多个可部署 HAP 时传入 `artifactName`。未指定时只自动选择唯一的 `*-signed.hap`。
+多模块工程可给 `build_run` 传入 `moduleName` 和 `artifactName`。未指定产物时，只有一个 HAP 则直接选择；存在多个 HAP 时选择唯一的 `*-signed.hap`，否则要求指定产物。
 
-MCP 请求支持并发；同一 MCP 进程内，同一设备上的点击、输入、构建和启动按顺序执行。发送 `$/cancelRequest` 或 `notifications/cancelled` 可取消普通取帧、强制刷新等待、控件等待、截图和 HDC 子进程；取消不会撤销已发送的设备输入。
+MCP 请求支持并发；同一进程内，同一设备上的点击、输入、构建和启动按顺序执行。取消请求不会撤销已发送的设备输入。
 
-同一 MCP 进程内，多个面板可共享一个设备的预览；停止或关闭一个面板只释放它的订阅。其他面板或公开调用仍持有会话时，无法切换到另一设备。面板订阅约 60 秒未续期会失效，会话约 5 秒未读取帧会暂停采集，动态画面不会自行续租。无有效订阅且无公开持有者时会话停止；公开 `preview_stop` 不带订阅 ID 时停止整个会话。
+同一 MCP 进程内，多个面板可共享一个设备的预览；停止或关闭面板只释放它的订阅。其他面板或公开调用仍持有会话时，面板无法切换到另一设备。公开 `preview_stop` 不带订阅 ID 时会停止整个会话。订阅与取消规则详见[使用说明](docs/codex-usage.md)。
 
 取帧异常或动作结果未知时，面板可保留标记为旧帧的画面并暂停交互，确认新帧后才恢复。结果未知时先检查设备，再按需选择 `Retry frame`；面板不会重发原操作。面板提示宿主过旧时，重新连接 MCP 并重新打开面板。协议字段和恢复流程见[使用说明](docs/codex-usage.md)。
 
 ## 安全边界
 
-- `tap_element` 只点击唯一、可点击、可见、坐标有效且未过期的控件，并且只执行一次。
+- `tap_element` 要求目标唯一、可点击、坐标有效且未过期，并拒绝明确标记为禁用或不可见的控件；最多执行一次。缺少可见性信息时仍可能通过，且无法保证目标未被遮挡或界面未发生变化。
 - `capture` 不复用实时预览缓存；动作后应重新观察、等待并截图。
 - WebView、自绘内容或未暴露的控件可能无法通过 UITest 定位。
 - 构建、安装、启动和设备操作都会改变设备状态，应在 Agent 获得用户授权后执行。
@@ -135,7 +136,7 @@ node scripts/check-codex.mjs `
 
 需要构建安装时追加 `--build`；多模块工程追加 `--module feature --artifact feature-signed.hap`。需要点击验收时，成对追加 `--tap-selector` 和 `--wait-selector`。
 
-完整验收记录见 [docs/codex-acceptance.md](docs/codex-acceptance.md)。GitHub Actions 会在 push、Pull Request 和每天 UTC 01:00 运行 Node.js 20/22 回归检查；Node.js 22 使用 `engine-strict` 安装，Node.js 20 使用默认安装方式。真机流程仍需在授权设备上执行。
+完整验收记录见 [docs/codex-acceptance.md](docs/codex-acceptance.md)。GitHub Actions 在推送到 `main`、针对 `main` 的 Pull Request、手动触发及每天 UTC 01:00 运行 Node.js 20/22 回归检查；Node.js 22 使用 `engine-strict` 安装，Node.js 20 使用默认安装方式。真机流程仍需在授权设备上执行。
 
 ## 文档
 

@@ -85,7 +85,7 @@ node bin/harmonyos-preview.mjs --project C:\path\to\my-harmonyos-project
 ### 设备操作
 
 1. 让 Agent 调用 `list_devices`，确认 HDC 已发现鸿蒙真机或模拟器。
-2. 需要重新安装应用时，让 Agent 调用 `build_run`。默认选择 `entry` 模块；多模块工程可传入 `moduleName`，当该模块生成多个可部署 HAP 时同时传入 `artifactName`，例如 `{"deviceId":"设备 ID","moduleName":"feature","artifactName":"feature-signed.hap"}`。未显式选择时，插件只会自动选择唯一的 `*-signed.hap`；多个签名产物仍返回构建产物歧义错误并停止安装。
+2. 需要重新安装应用时，让 Agent 调用 `build_run`。默认选择 `entry` 模块；多模块工程可传入 `moduleName`，并可用 `artifactName` 指定产物，例如 `{"deviceId":"设备 ID","moduleName":"feature","artifactName":"feature-signed.hap"}`。未指定产物时，只有一个 HAP 会直接选择；多个 HAP 中若只有一个 `*-signed.hap`，则选择该签名产物；否则返回构建产物歧义错误并停止安装。
 3. 调用 `preview_start`，记录返回的 `sessionId` 和 `previewUrl`。
 4. 使用 Codex 宿主的浏览器面板动作打开 `previewUrl`，位置设为 `right`；MCP App 通过 `preview_frame(afterSeq)` 获取实时画面，重复帧不会再次渲染。
 5. Agent 使用 `observe` / `find` 读取页面和定位目标；用户已授权点击时优先用 `tap_element` 重新检查并点击目标。右侧面板自身的点击和拖动使用 App-only `preview_action`，模型仍使用 `tap` / `swipe` / `tap_element`。
@@ -121,7 +121,7 @@ MCP 请求可以并发处理；同一 MCP 进程内，同一设备上的点击�
 - `previewSubscriptionProtocol`：面板订阅协议版本，当前为 `1`
 - `subscriberId`：仅请求 `subscriber: true` 时返回，用于该面板续期和释放
 
-`preview_frame` 是 MCP App 专用的实时帧接口，参数 `afterSeq` 用于去重，动作后的读取可传 `waitMs` 等待下一个新帧。结构化结果中的 `metrics` 提供 `source`、`captureMs`、`captureStages`、`frameBytes`、`capturedAt`、`width`、`height`、`deviceWidth` 和 `deviceHeight`。缩放后的 JPEG 优先通过一次 HDC 命令采集和传输，`captureStages.combinedMs` 表示两者合计耗时；设备不支持或响应未通过标记与 JPEG 基本结构检查时回退到文件传输，返回 `snapshotMs`、`transferMs` 和 `readMs`。基本结构检查不能保证图片一定能完整解码。面板还会显示本地 `renderMs`；`preview_action` 返回 `actionMs`、`frameSeq` 和 `nextFrameAfterSeq`，用于判断点击响应瓶颈并跳过动作前帧。它返回 `content: []`，图片只放在结构化结果中，不进入模型上下文。`capture` 仍然每次重新采集设备画面，适合模型在动作后取得独立证据。
+`preview_frame` 是 MCP App 专用的实时帧接口，参数 `afterSeq` 用于去重，动作后的读取可传 `waitMs` 等待下一个新帧。结构化结果中的 `metrics` 提供 `source`、`captureMs`、`captureStages`、`frameBytes`、`capturedAt`、`width`、`height`、`deviceWidth` 和 `deviceHeight`。缩放后的 JPEG 优先通过一次 HDC 命令采集和传输，`captureStages.combinedMs` 表示两者合计耗时；设备不支持或响应未通过标记与 JPEG 基本结构检查时回退到文件传输，返回 `snapshotMs`、`transferMs` 和 `readMs`。基本结构检查不能保证图片一定能完整解码。面板内部还会记录本地 `renderMs`，但底部指标已隐藏；`preview_action` 返回 `actionMs`、`frameSeq` 和 `nextFrameAfterSeq`，用于判断点击响应瓶颈并跳过动作前帧。`preview_frame` 返回 `content: []`，图片只放在结构化结果中，不进入模型上下文。`capture` 仍然每次重新采集设备画面，适合模型在动作后取得独立证据。
 
 预览区使用面板剩余空间，画面按设备比例完整显示；`Fit` 恢复自适应尺寸，放大后可以滚动画面。工具栏提供设备“返回”和“主页”，操作会等待动作后的新帧；新帧本身不证明业务操作成功。点击仅作用于图片，四周留白不发送设备输入；手势期间画面位置或尺寸变化时，该手势会取消，避免误点。
 
@@ -198,7 +198,7 @@ HTTP 设备请求失败和 WebSocket `error` 消息也保留上述诊断字段�
 
 `tap_element` 必填 `deviceId` 和 `selector`，可选 `bundleName` 与 `verify`。选择器与 `find` 一致，所有条件按 AND 匹配。例如用户已授权点击提交按钮时，调用：`{"deviceId":"目标设备","selector":{"id":"submit","clickable":true,"enabled":true}}`。需要自动确认点击结果时，增加 `verify`：`{"selector":{"text":"提交成功"},"state":"present","timeoutMs":5000}`；`state` 默认 `present`，也可用 `absent`。
 
-工具内部重新读取控件树，以 `limit: 2` 返回候选，但用全树的匹配总数判断是否唯一；只有唯一匹配、`clickable: true`、未明确禁用或隐藏、`bounds` 与 `center` 有效，且 `observedAt` 距点击检查为 0–1000 毫秒时，才发送一次点击。不会复用上次 `find` 的坐标，也不会自动重试。
+工具内部重新读取控件树，以 `limit: 2` 返回候选，但用全树的匹配总数判断是否唯一；只有唯一匹配、`clickable: true`、未明确禁用或隐藏、`bounds` 与 `center` 有效，且 `observedAt` 距点击检查为 0 至 1000 毫秒时，才发送一次点击。缺少可见性字段时仍可能通过，检查也不能保证目标未被遮挡。工具不会复用上次 `find` 的坐标，也不会自动重试。
 
 预检拒绝分别返回 `ELEMENT_NOT_FOUND`（没有匹配）、`ELEMENT_AMBIGUOUS`（多个匹配）、`ELEMENT_NOT_ACTIONABLE`（不可点击或几何无效）、`STALE_OBSERVATION`（采样无效或过期），不发出点击；布局读取或 HDC 失败保留原错误码。MCP 会尝试补充新截图，补图错误另记。若实际点击命令失败或超时，动作可能已经生效，应先重新观察，不能自动再点一次。
 
@@ -208,7 +208,7 @@ HTTP 设备请求失败和 WebSocket `error` 消息也保留上述诊断字段�
 
 ### 等待页面变化
 
-`wait_for` 读取当前控件树并等待条件满足，不会自动点击。必填参数为 `deviceId` 和 `selector`；可选 `bundleName`。`selector` 复用 `find` 的 AND 条件。`state` 为 `present`（默认）或 `absent`；`timeoutMs` 为 1–30000 的整数，默认 5000；`intervalMs` 为 100–5000 的整数，默认 500，单位均为毫秒。
+`wait_for` 读取当前控件树并等待条件满足，不会自动点击。必填参数为 `deviceId` 和 `selector`；可选 `bundleName`。`selector` 复用 `find` 的 AND 条件。`state` 为 `present`（默认）或 `absent`；`timeoutMs` 为 1 至 30000 的整数，默认 5000；`intervalMs` 为 100 至 5000 的整数，默认 500，单位均为毫秒。
 
 例如提交后等待文字更新：
 

@@ -12,7 +12,7 @@ HarmonyOS Use 让 Codex 等 AI Agent 通过 MCP 预览和操作 HarmonyOS 真机
 - **查看页面**：读取 UITest 控件树，按文字、ID、类型和状态查找目标。
 - **验证应用**：构建、安装并启动应用，通过截图和 `wait_for` 验证页面变化。
 - **实时预览**：通过 MCP App 或 WebSocket 查看画面，点击后请求新帧，重复帧不进入模型上下文。
-- **安全操作**：优先重新查找控件；坐标操作可绑定 `frameId`/`seq` 并校验旧帧。歧义目标、禁用控件和无效坐标会被拒绝，预览坐标按帧尺寸映射到设备像素。
+- **安全操作**：`tap_element` 会重新查找控件，拒绝歧义或明确禁用的目标。坐标操作可绑定 `frameId`/`seq` 校验旧帧；预览坐标按帧尺寸映射到设备像素。
 - **断线恢复**：设备短暂离线时保留会话，恢复连接后继续预览。
 
 ## 快速开始
@@ -90,8 +90,8 @@ MCP 请求支持并发；同一进程内，同一设备上的点击、输入、�
 | `HARMONY_PREVIEW_HDC_TIMEOUT_MS` | 单次 HDC 命令超时，默认 15000 毫秒 |
 | `HARMONY_PREVIEW_ACTION_PREPARE_TIMEOUT_MS` | 点击前暂停预览采集的握手等待，默认 1000 毫秒，范围 5 至 5000；超时不执行点击 |
 | `HARMONY_PREVIEW_SCALE` | JPEG 预览采样比例，默认 0.75，范围 0.25 至 1；首帧仍保留设备原始尺寸 |
-| `HARMONY_PREVIEW_FAST_TAP` | 可选，仅对值精确匹配的 HDC 设备 ID 启用预览快速点击；未设置时使用标准点击 |
-| `HARMONY_PREVIEW_FAST_SWIPE` | 实验性；仅对值精确匹配的 HDC 设备 ID 启用预览快速滑动，未设置时使用标准滑动 |
+| `HARMONY_PREVIEW_FAST_TAP` | 可选，仅当配置值与 HDC 设备 ID 完全一致时启用预览快速点击；未设置时使用标准点击 |
+| `HARMONY_PREVIEW_FAST_SWIPE` | 实验性；仅当配置值与 HDC 设备 ID 完全一致时启用预览快速滑动，未设置时使用标准滑动 |
 
 快速点击仅建议在已经实机验证 `uinput` 可用的设备上启用，并在 MCP 服务启动前设置对应设备 ID。能力探测不支持或失败时会在输入前使用标准点击；成功的面板点击会在 `preview_action` 结果中记录实际 `inputMethod`（`uinput` 或 `uitest`），不能仅凭配置判断实际路径。快速输入一旦发送，失败或结果不明时不会自动重发。命令返回和新帧均不代表业务操作成功。
 
@@ -109,7 +109,7 @@ npm run check
 npm pack --dry-run --registry=https://registry.npmjs.org/
 ```
 
-点击性能基准：
+点击性能基准会重复点击指定坐标。运行前确认坐标可安全重复操作，并关闭其他预览：
 
 ```powershell
 npm run benchmark:preview -- `
@@ -120,7 +120,7 @@ npm run benchmark:preview -- `
   --y 1
 ```
 
-基准会重复点击指定坐标。运行前选择可安全重复操作的位置，并关闭其他预览；脚本不会自动检查其他采集会话。基准使用独立 MCP 进程，不包含面板渲染，也不验证应用业务结果。
+基准使用独立 MCP 进程，不包含面板渲染，也不验证应用业务结果；脚本不会自动检查其他采集会话。
 
 输出包含动作和采集分段耗时及汇总；`frameAgeMs` 是帧送达 MCP 后的时间，不代表设备截图时间。`warmup` 样本不计入汇总；示例中的 10 次适合快速排查，单次 p95 不能代表稳定尾延迟。可在 PowerShell 设置 `$env:HARMONY_PREVIEW_SCALE='0.4'` 调整采样比例；指标含义和重复测量方法见[使用说明](docs/codex-usage.md)。
 

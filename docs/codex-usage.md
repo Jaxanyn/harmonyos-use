@@ -11,7 +11,7 @@ node --version
 npm config get engine-strict
 ```
 
-如果当前 `node` 是 20，切换到 Node.js 22 后重新执行 `npm ci`；如需确保安装脚本注册的是指定的 Node.js 22，可在原命令中追加 `-NodeCommand "C:\path\to\node22\node.exe"`。将路径替换为本机可执行文件的实际路径。已有同名 MCP 配置时，脚本默认保留原配置；如需替换，追加 `-Force`，然后重新连接 Codex。
+如果当前 `node` 是 20，切换到 Node.js 22 后重新执行 `npm ci`。如需注册指定的 Node.js 22，可在安装命令中追加 `-NodeCommand "C:\path\to\node22\node.exe"`，并将路径替换为本机可执行文件的路径。已有同名 MCP 配置默认保留；如需替换，追加 `-Force` 后重新连接 Codex。
 
 隔离验证中，Node.js 20.20.2 默认安装出现上述警告，但打包后的 MCP 初始化、工具列表和资源元数据契约通过；严格安装失败。Node.js 22.23.4 的严格安装和相同打包契约通过。这只说明本次环境和这些检查的结果，不代表 Node.js 20 获得上游支持或所有设备场景均已验证。
 
@@ -55,11 +55,11 @@ node bin/harmonyos-preview.mjs --project C:\path\to\my-harmonyos-project
 --env HARMONY_PREVIEW_URL=http://127.0.0.1:4100
 ```
 
-需要 MCP 在服务不可用时自动拉起本机预览服务时，再增加 `--env HARMONY_PREVIEW_AUTOSTART=1`。安装脚本也支持 `-AutoStartPreview`。
+如需在预览服务不可用时由 MCP 自动拉起本机服务，增加 `--env HARMONY_PREVIEW_AUTOSTART=1`。安装脚本也支持 `-AutoStartPreview`。
 
 注册后重启 Codex 或刷新 MCP 工具列表。内置预览服务默认监听本机地址，端口由 MCP 进程自动分配；独立预览服务以其配置为准。
 
-升级后新增的 `tap_element` 需要宿主重新连接 MCP 才能加载。已有只读验收通过时，使用新工具前确认它已出现在工具列表即可，无需重复此前已经完成的只读验收。
+升级后新增的 `tap_element` 需要宿主重新连接 MCP 才能加载。已有只读验收通过时，使用前确认工具已出现在列表，无需重复只读验收。
 
 ## 固定到 Codex 侧边栏
 

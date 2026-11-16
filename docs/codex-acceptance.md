@@ -1,6 +1,6 @@
 # Codex 验收
 
-本清单先检查环境，再按需执行只读、点击、构建或宿主画面验收。点击和构建会改变设备状态，须获得用户对本次操作的授权。
+本清单先检查环境，再按需执行只读、点击、构建或宿主画面验收。点击、滑动和构建会改变设备状态，须获得用户对本次操作的授权。
 
 ## 环境检查
 
@@ -23,7 +23,7 @@ codex mcp get harmonyos-preview
 
 ## 默认只读验收
 
-替换工程路径和 `DEVICE_ID` 后运行：
+运行 `hdc list targets` 或调用 `list_devices` 获取设备 ID，替换工程路径和 `DEVICE_ID` 后运行：
 
 ```powershell
 node scripts/check-codex.mjs `
@@ -72,10 +72,12 @@ node scripts/check-codex.mjs `
 
 以下操作在 Codex 宿主中单独进行，不属于上面的命令行脚本：
 
-1. 调用 `preview_start`，记录 `sessionId`，打开返回的 `previewUrl`，确认目标设备显示新画面。
-2. 在当前对话调用 `observe`、`find` 和 `capture`，确认控件与 MCP 图片可用。
-3. 用户已授权操作时，调用 `tap_element`，再用 `wait_for` 和新的 `capture` 检查结果。无法通过控件树定位时，先用新截图确认坐标 `tap` 的目标。
-4. 调用 `preview_stop` 并传入记录的 `sessionId`，确认会话结束。
+1. 调用 `preview_info` 查看会话。已有会话的 `deviceId` 与目标设备不一致时，暂停验收，不要自动停止其他面板的会话。
+2. 调用 `preview_panel` 打开面板，选择目标设备并启动，确认画面持续更新。再次调用 `preview_info` 确认会话设备并记录 `sessionId`。
+3. 在当前对话调用 `observe`、`find` 和 `capture`，确认控件与 MCP 图片可用。
+4. 用户已授权操作时，在安全页面点击并确认预期反应；可调用 `tap_element`，再用 `wait_for` 和新的 `capture` 检查。无法通过控件树定位时，先用新截图确认坐标 `tap` 的目标。
+5. 用户已授权滑动时，在可安全滑动的页面拖动，确认内容实际移动，并观察点击、滑动是否迟缓或画面闪黑；记录异常和测试方式。命令行只读验收不能代替此项面板操作观察。
+6. 不再需要预览时关闭本面板；若要调用 `preview_stop` 停止整个会话，先确认不会影响其他面板，并传入记录的 `sessionId`。
 
 固定侧边栏由 Codex 宿主界面决定。预览画面或新截图本身不证明业务操作成功。
 

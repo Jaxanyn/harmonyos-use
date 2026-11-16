@@ -11,8 +11,8 @@ Use this workflow to inspect or run a HarmonyOS app on a connected device, or op
 
 1. For a preview beside the conversation or in the right panel, call `preview_panel` first. Use `preview_open` for the global sidebar entry. Neither tool can force a pin or keep the panel open across chats or restarts.
 2. Call `list_devices` and select a device ID. If none is listed, report that HDC must be connected and authorized.
-3. Call `preview_info` with `deviceId`. Check `deviceCheck.status` and `runtime`; the top-level `connected` only indicates whether preview frames have arrived. If `restored: true`, reuse its `sessionId` and `previewUrl`.
-4. If a rebuild or launch is requested or otherwise authorized, call `build_run` with the device ID. It defaults to `entry`; use `moduleName` for another module and `artifactName` when multiple HAPs are produced. If no session was restored, call `preview_start` with the same device ID and save its `sessionId` and `previewUrl`.
+3. Call `preview_info` with `deviceId`. Check `deviceCheck.status` and `runtime`; the top-level `connected` only indicates whether preview frames have arrived. Before reusing a restored session, confirm the top-level `deviceId` matches the selected device. If an existing session belongs to another device, report the conflict and pause this workflow until it is resolved; do not automatically stop or replace a shared session.
+4. If a rebuild or launch is requested or otherwise authorized, call `build_run` with the device ID. It defaults to `entry`; use `moduleName` for another module and `artifactName` when multiple HAPs are produced. Reuse the matching restored `sessionId` and `previewUrl`; otherwise, when there is no device conflict, call `preview_start` with the selected device ID and save its `sessionId` and `previewUrl`.
 5. If the panel needs a live-preview fallback, use the Codex host action `open_in_codex` with `{ target: { type: "browser", url: previewUrl }, placement: "right" }`. The MCP App consumes `preview_frame`; call `capture` when the model needs an independent fresh image.
 
 ## Inspect and interact

@@ -296,7 +296,7 @@ npm run check
 npm pack --dry-run --registry=https://registry.npmjs.org/
 ```
 
-完整验收记录见 [docs/codex-acceptance.md](codex-acceptance.md)。GitHub Actions 在推送到 `main`、针对 `main` 的 Pull Request、手动触发及每天 UTC 01:00 运行 Node.js 20/22 回归检查；Node.js 22 使用 `engine-strict` 安装，Node.js 20 使用默认安装方式。真机流程仍需在授权设备上执行。
+验收步骤见[真机验收清单](codex-acceptance.md)，历史采样和诊断见[历史验收记录](codex-acceptance-history.md)。GitHub Actions 在推送到 `main`、针对 `main` 的 Pull Request、手动触发及每天 UTC 01:00 运行 Node.js 20/22 回归检查；Node.js 22 使用 `engine-strict` 安装，Node.js 20 使用默认安装方式。真机流程仍需在授权设备上执行。
 
 ## 常见问题
 

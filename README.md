@@ -1,14 +1,18 @@
 # harmonyos-use
 
-HarmonyOS Use 让 Codex 等 AI Agent 通过 MCP 预览和操作 HarmonyOS 真机或模拟器。
-
-可以用它发现设备、读取控件树和截图，构建并安装应用，以及预览画面并通过 MCP 工具点击、滑动或输入。
+HarmonyOS Use 让 Codex 等 AI Agent 通过 MCP 预览和操作 HarmonyOS 真机或模拟器，支持设备发现、截图、控件树读取、构建安装，以及点击、滑动和输入。
 
 ## 快速开始
 
-需要 Windows、Git、Codex CLI、Node.js 20+、DevEco Studio、HDC，以及已授权的真机或已启动的模拟器。建议使用 Node.js 22：上游依赖 `@openai/mcp-extensions` 声明要求 Node.js 22+；Node.js 20 默认安装可能提示 `EBADENGINE`，启用 npm `engine-strict` 时安装会失败。
+### 1. 准备环境
 
-HDC 在 `PATH` 中时，运行 `hdc list targets` 检查设备。否则运行 `& "C:\path\to\hdc.exe" list targets`，并在安装脚本中追加 `-HdcCommand "C:\path\to\hdc.exe"`。将路径替换为实际位置。
+需要 Windows、Git、Codex CLI、Node.js 20+、DevEco Studio、HDC、已存在的 HarmonyOS 工程，以及已授权的真机或已启动的模拟器。
+
+建议使用 Node.js 22：上游依赖 `@openai/mcp-extensions` 要求 Node.js 22+。Node.js 20 默认安装可能提示 `EBADENGINE`，启用 npm `engine-strict` 时安装会失败。
+
+运行 `hdc list targets` 检查设备。HDC 不在 `PATH` 中时，使用 `& "C:\path\to\hdc.exe" list targets`，并在安装脚本中追加 `-HdcCommand "C:\path\to\hdc.exe"`，将路径替换为实际位置。
+
+### 2. 安装 MCP
 
 ```powershell
 git clone https://github.com/Jaxanyn/harmonyos-use.git
@@ -18,7 +22,9 @@ npm ci
 codex mcp get harmonyos-preview
 ```
 
-将示例中的 `C:\path\to\my-harmonyos-project` 替换为已存在的 HarmonyOS 工程目录。已有同名 MCP 配置默认不覆盖；确认需要替换时追加 `-Force`。注册后刷新 MCP 工具列表或重启 Codex。
+将 `C:\path\to\my-harmonyos-project` 替换为实际工程目录。已有同名 MCP 配置默认不覆盖；确认需要替换时追加 `-Force`。注册后刷新 MCP 工具列表或重启 Codex。
+
+### 3. 打开预览
 
 然后在 Codex 中发送：
 
@@ -26,7 +32,7 @@ codex mcp get harmonyos-preview
 列出已连接的设备并打开预览面板；不要构建、安装或操作设备。
 ```
 
-`preview_panel` 可打开 MCP App，首次显示位置由宿主决定。如果面板先出现在聊天中，请展开面板；然后选择设备并点击 `Start`。`previewUrl` 可用于浏览器预览。
+面板首次显示位置由宿主决定。如果面板出现在聊天中，请展开面板，然后选择设备并点击 `Start`。`previewUrl` 可用于浏览器预览。
 
 `codex mcp get` 只确认注册信息。设备出现在列表、面板显示正在运行且画面能够更新后，才能确认当前连接可用。
 

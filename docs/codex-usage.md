@@ -106,6 +106,26 @@ MCP 请求可以并发处理；同一 MCP 进程内，同一设备上的点击�
 启动 HarmonyOS 项目，打开鸿蒙真机实时预览，点击主操作按钮并确认画面变化。
 ```
 
+## 配置与快速输入
+
+| 环境变量 | 用途 |
+| --- | --- |
+| `HARMONY_PROJECT` | MCP 模式下的 HarmonyOS 工程路径 |
+| `HDC` | HDC 可执行文件路径，默认使用 `PATH` 中的 `hdc` |
+| `HARMONY_PREVIEW_URL` | 复用已独立启动的预览服务 |
+| `HARMONY_PREVIEW_AUTOSTART=1` | 预览服务不可用时自动拉起本机服务 |
+| `HARMONY_PREVIEW_HDC_TIMEOUT_MS` | 单次 HDC 命令超时，默认 15000 毫秒 |
+| `HARMONY_PREVIEW_ACTION_PREPARE_TIMEOUT_MS` | 点击前暂停预览采集的握手等待，默认 1000 毫秒，范围 5 至 5000；超时不执行点击 |
+| `HARMONY_PREVIEW_SCALE` | JPEG 预览采样比例，默认 0.75，范围 0.25 至 1；首帧仍保留设备原始尺寸 |
+| `HARMONY_PREVIEW_FAST_TAP` | 可选，仅当配置值与 HDC 设备 ID 完全一致时启用预览快速点击；未设置时使用标准点击 |
+| `HARMONY_PREVIEW_FAST_SWIPE` | 实验性；仅当配置值与 HDC 设备 ID 完全一致时启用预览快速滑动，未设置时使用标准滑动 |
+
+快速点击仅建议在已经实机验证 `uinput` 可用的设备上启用，并在 MCP 服务启动前设置对应设备 ID。能力探测不支持或失败时会在输入前使用标准点击；成功的面板点击会在 `preview_action` 结果中记录实际 `inputMethod`（`uinput` 或 `uitest`），不能仅凭配置判断实际路径。快速输入一旦发送，失败或结果不明时不会自动重发。命令返回和新帧均不代表业务操作成功。
+
+快速滑动为实验路径，仅建议在指定设备上完成方向、距离和应用效果验证后启用。设备、屏幕方向、能力或时长条件不满足时在输入前使用标准滑动；输入发出后发生失败、超时或取消时结果未知，不自动重发或补发抬起。当前尚未验证设备断线或进程中止后的触摸释放，也不提供拖动过程实时跟手。实际输入方式可从 `preview_action` 结果的 `metrics.inputMethod` 确认。
+
+帧源能力可通过 `GET /api/capabilities` 查看。当前 HDC 适配器明确报告 `jpeg` 可用、`mjpeg`/`h264` 不可用；`FrameSource` 已支持可选的 `openFrameStream()` 适配器，设备具备长驻流能力时可直接使用 MJPEG 帧流，未提供该能力的设备继续使用 JPEG 回退。
+
 ## 返回结果
 
 `preview_start` 返回：
@@ -223,6 +243,18 @@ HTTP 设备请求失败和 WebSocket `error` 消息也保留上述诊断字段�
 超时或读取失败返回 MCP `isError: true`，同时尝试采集新截图，绝不使用预览缓存。补图采集预算为 3 秒，每次 HDC 清理最多 2 秒；等待末次检查和补图各可能清理一次，因此超过等待期限后仍可能额外耗时约 7 秒。补图失败保留 `screenshotError` 与独立的 `screenshotDiagnostic`。遇到 `timeout` 或 `observation_failed` 时，检查主错误、补图诊断与截图后再决定下一步，不把等待失败视为业务失败或自动重复点击。
 
 预览页面按解码后的图片实际尺寸映射坐标。切设备、断线、停止及捕获失败后，旧画面不再用于操作；取得所选设备的新帧后才能交互。
+
+## 验证
+
+本地回归：
+
+```powershell
+npm install
+npm run check
+npm pack --dry-run --registry=https://registry.npmjs.org/
+```
+
+完整验收记录见 [docs/codex-acceptance.md](codex-acceptance.md)。GitHub Actions 在推送到 `main`、针对 `main` 的 Pull Request、手动触发及每天 UTC 01:00 运行 Node.js 20/22 回归检查；Node.js 22 使用 `engine-strict` 安装，Node.js 20 使用默认安装方式。真机流程仍需在授权设备上执行。
 
 ## 常见问题
 

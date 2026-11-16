@@ -2,8 +2,6 @@
 
 HarmonyOS Use 让 Codex 等 AI Agent 通过 MCP 预览和操作 HarmonyOS 真机或模拟器。
 
-项目原名为 harmonyos-preview。为兼容已有安装，npm 包名、命令、MCP 注册名和环境变量仍使用原名；预览面板名为 HarmonyOS Preview。
-
 可以用它发现设备、读取控件树和截图，构建并安装应用，以及预览画面并通过 MCP 工具点击、滑动或输入。
 
 ## 快速开始

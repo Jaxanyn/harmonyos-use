@@ -5,7 +5,7 @@ description: Use HarmonyOS Use MCP tools from Codex to build, run, observe and i
 
 # HarmonyOS Use in Codex
 
-Use this workflow when the user asks to run or inspect a HarmonyOS project on a connected device, or asks to open the HarmonyOS Preview panel in Codex. The project was previously named harmonyos-preview; its existing MCP registration and commands retain that name for compatibility.
+Use this workflow when the user asks to run or inspect a HarmonyOS project on a connected device, or asks to open the HarmonyOS Preview panel in Codex. The existing MCP registration and commands retain `harmonyos-preview` for compatibility.
 
 ## Required workflow
 
@@ -29,7 +29,7 @@ Use this workflow when the user asks to run or inspect a HarmonyOS project on a 
 - `preview_action` is MCP App-only for one pointer tap or swipe. It checks the current frame, waits for the preview service to acknowledge capture pause, and resumes JPEG sampling after the input completes. The panel uses `nextFrameAfterSeq` to wait for the next frame. Successful model-facing `tap`, `tap_element`, `swipe`, `long_press`, `key_event` and `input_text` calls also request a live-preview refresh.
 - MCP requests may run concurrently; mutating operations for one device are queued in arrival order while reads and waits remain responsive. Send `$/cancelRequest` or `notifications/cancelled` with `params.requestId` to cancel a long wait, screenshot or HDC child process; expect JSON-RPC error `-32800`.
 - `observe` defaults to 200 nodes; `find` defaults to 20 candidates. Conditions combine with AND, and matching multiple nodes never triggers an automatic click. Re-read after any navigation, scrolling or rotation.
-- `tap_element` takes `deviceId`, the same AND `selector`, and optional `bundleName`. It queries a fresh tree with a two-candidate limit but checks the full match count. It clicks once only for a unique, clickable target that is not explicitly disabled or hidden, has valid bounds and center, and has a valid observation age of 0–1000 ms. Preflight rejection does not click or retry; HDC action failure may already have taken effect, so inspect new evidence before deciding what to do.
+- `tap_element` takes `deviceId`, the same AND `selector`, and optional `bundleName`. It queries a fresh tree with a two-candidate limit but checks the full match count. It clicks once only for a unique, clickable target that is not explicitly disabled or hidden, has valid bounds and center, and has a valid observation age from 0 through 1000 ms. Preflight rejection does not click or retry; HDC action failure may already have taken effect, so inspect new evidence before deciding what to do.
 - `tap_element` success returns `action: "tap"`, `target`, `observedAt` and `verified: false`. It confirms command execution, not business completion; follow with `wait_for` and `capture`. It does not atomically eliminate UI changes between reading and tapping or make custom-rendered controls locatable.
 - Empty or truncated trees and layout errors are not proof that a target is absent. Inspect the fresh screenshot fallback and its capture metadata. If `screenshotError` is present, inspect `screenshotDiagnostic` separately from the main error before acting.
 - `wait_for` uses the same AND selector as `find`; `state` is `present` (default) or `absent`. `timeoutMs` is an integer from 1 to 30000 (default 5000), and `intervalMs` from 100 to 5000 (default 500). Optional `bundleName` scopes the layout. It observes only and never clicks.

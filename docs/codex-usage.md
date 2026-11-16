@@ -1,6 +1,6 @@
 # Codex 使用说明
 
-HarmonyOS Use 原名 harmonyos-preview。为兼容已有配置，MCP 注册名、命令及环境变量仍使用原名；预览面板名称仍为 HarmonyOS Preview。
+HarmonyOS Use 的 MCP 注册名和命令为 `harmonyos-preview`，预览面板名称为 HarmonyOS Preview；现有环境变量保持兼容。
 
 ## 安装 MCP
 
@@ -15,7 +15,7 @@ npm config get engine-strict
 
 隔离验证中，Node.js 20.20.2 默认安装出现上述警告，但打包后的 MCP 初始化、工具列表和资源元数据契约通过；严格安装失败。Node.js 22.23.4 的严格安装和相同打包契约通过。这只说明本次环境和这些检查的结果，不代表 Node.js 20 获得上游支持或所有设备场景均已验证。
 
-推荐先使用安装脚本：
+先在仓库根目录运行 `npm ci` 安装依赖，再使用安装脚本。将示例中的工程路径替换为已存在的目录：
 
 ```powershell
 .\scripts\install-codex.ps1 -ProjectPath C:\path\to\my-harmonyos-project
@@ -31,7 +31,7 @@ HDC 不在 `PATH` 时，明确指定可执行文件：
   -HdcCommand "C:\Program Files\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe"
 ```
 
-将示例路径替换为本机实际位置。脚本解析并检查该文件后，会把完整路径作为 `HDC` 环境变量注册到 MCP；即使使用 `-SkipDeviceCheck`，显式指定的 HDC 路径仍会传入。手工执行 `codex mcp add` 时，可用 `--env "HDC=C:\path\to\hdc.exe"` 指定相同路径。
+将示例路径替换为本机实际位置。新注册或使用 `-Force` 替换配置时，脚本会检查该文件，并将完整路径作为 `HDC` 环境变量注册到 MCP；即使使用 `-SkipDeviceCheck`，显式指定的 HDC 路径仍会传入。手工执行 `codex mcp add` 时，可用 `--env "HDC=C:\path\to\hdc.exe"` 指定相同路径。
 
 在 PowerShell 中注册本地插件：
 
@@ -57,7 +57,7 @@ node bin/harmonyos-preview.mjs --project C:\path\to\my-harmonyos-project
 
 需要 MCP 在服务不可用时自动拉起本机预览服务时，再增加 `--env HARMONY_PREVIEW_AUTOSTART=1`。安装脚本也支持 `-AutoStartPreview`。
 
-注册后重启 Codex 或刷新 MCP 工具列表。插件进程只监听本机地址，预览服务的端口由 MCP 进程自动分配。
+注册后重启 Codex 或刷新 MCP 工具列表。内置预览服务默认监听本机地址，端口由 MCP 进程自动分配；独立预览服务以其配置为准。
 
 升级后新增的 `tap_element` 需要宿主重新连接 MCP 才能加载。已有只读验收通过时，使用新工具前确认它已出现在工具列表即可，无需重复此前已经完成的只读验收。
 

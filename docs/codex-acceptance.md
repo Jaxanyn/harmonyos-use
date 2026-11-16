@@ -1,5 +1,98 @@
 # Codex 验收
 
+先执行[环境检查](#环境检查)，再按需进行[默认只读验收](#默认只读验收)、[点击后等待并截图](#点击后等待并截图)、[包含构建的验收](#包含构建的验收)或 [Codex 画面验收](#codex-画面验收)。[历史记录](#历史记录)保留此前的测试证据。
+
+## 环境检查
+
+先确认 MCP 已注册：
+
+```powershell
+codex mcp get harmonyos-preview
+```
+
+确认设备和项目：
+
+```powershell
+.\scripts\install-codex.ps1 `
+  -ProjectPath C:\path\to\my-harmonyos-project `
+  -RequireDevice `
+  -CheckOnly
+```
+
+## 默认只读验收
+
+该命令先检查所需工具与 `preview_info` 诊断契约，再只读探测设备，验证 `observe`、`find`、`wait_for`、预览地址和新截图。不安装或启动应用，也不点击设备：
+
+```powershell
+node scripts/check-codex.mjs `
+  --project C:\path\to\my-harmonyos-project `
+  --device DEVICE_ID
+```
+
+通过时输出 JSON，其中 `check` 为 `codex: ok`，并包含设备、截图字节数、预览会话编号、`toolsVerified`、`actionVerified`、`waitStatus`、`waitAttempts`、`frameId`、`capturedAt` 和 `connectionCheck`。默认 `actionVerified` 为 `false`；只读查询通过只说明当前 UITest 控件可读取、查找和等待，不代表业务操作已完成。
+
+`connectionCheck.scope` 在命令行模式下为 `isolated_process`；代码调用 `checkCodex` 并传入已有客户端时为 `provided_client`。结果还包含 `runtime`、`deviceStatus` 和固定为 `false` 的 `hostConnectionVerified`。脚本不打开或操作电脑界面，也不自动刷新宿主；独立进程通过不能证明当前 Codex 对话已经重连。
+
+宿主连接应在当前对话单独检查：调用 `preview_info`，传入 `{"deviceId":"目标设备"}`，确认返回 `runtime.diagnosticsVersion: 1` 和 `deviceCheck.status: "connected"`，再实际调用 `observe`、`find` 和 `wait_for`。`runtime.instanceId` 在同一次 MCP 服务启动期间稳定，可帮助区分运行实例；它不代替工具调用验证。
+
+缺少所需工具、`runtime` 或诊断契约不兼容时，验收返回 `MCP_OUTDATED`；检查安装路径并由用户重新连接宿主后再验收。设备自检失败保留具体的设备或 HDC 错误码；独立预览服务失败保留 `serviceDiagnostic` 中的错误，均不统一改写成版本过旧。
+
+## 点击后等待并截图
+
+仅在用户授权这次设备点击后运行。必须显式指定 `--device`，并成对提供 `--tap-selector` 与 `--wait-selector`；参数为 JSON 对象，复用 `find` 的 AND 条件。PowerShell 用单引号包住 JSON：
+
+```powershell
+node scripts/check-codex.mjs `
+  --project C:\path\to\my-harmonyos-project `
+  --device DEVICE_ID `
+  --tap-selector '{"id":"openDetails","clickable":true}' `
+  --wait-selector '{"id":"detailsTitle","text":"详情"}'
+```
+
+将示例 ID 和文字替换为目标应用控件实际暴露的 ID 和文字。运行前让设备停留在目标页面；脚本不会替用户导航寻找入口。
+
+1. 先检查 `--wait-selector` 尚无匹配，避免将已有结果误认为本次操作生效。
+2. 调用 `tap_element`，由工具内部重新查询并检查点击目标：唯一、可点击，且具有有效的 `bounds` 和 `center`；明确禁用、隐藏或采样无效、已超过 1 秒的目标会被拒绝，不发出点击。缺少可见性信息时仍可能通过，检查不能保证目标未被遮挡或界面未发生变化。
+3. 点击最多执行一次；未传 `verify` 时 `verified: false` 不代表业务完成。传入 `verify` 后由工具在同一设备锁内等待预期控件和文字，`verified` 仅在等待结果为 `matched` 时为 `true`；脚本等待上限为 10000 毫秒。
+4. 匹配成功后重新 `capture`，确认返回的是动作后的新截图。
+
+预期目标事前已匹配、控件树不可读、点击候选不唯一或坐标无效时，不应开始点击。预检拒绝保留 `ELEMENT_NOT_FOUND`、`ELEMENT_AMBIGUOUS`、`ELEMENT_NOT_ACTIONABLE` 或 `STALE_OBSERVATION`；布局或 HDC 错误保留具体原因。等待超时或读取失败会报错并尝试新截图；实际点击命令失败或超时时也不重复点击，先查看新证据，不能假定动作未生效。自绘内容、WebView 或未暴露的控件可能无法使用此链路；截图与 UITest 结果也不能独立证明业务提交成功。
+
+默认只读模式不调用 `tap_element` 或坐标 `tap`。动作模式要求本次 MCP 连接提供 `tap_element`；工具缺失按 `MCP_OUTDATED` 处理。在 Codex 中使用新增工具需要宿主重新连接并确认可用，无需重复已完成的旧版只读验收。
+
+失败时输出 `check: "codex: failed"` 和 `error`，进程以非零状态退出；工具失败还包含 `diagnostics.tool` 和结构化结果，不输出截图的 Base64 图片数据。诊断保留 `errorCode`、`stage`、`deviceId`、`elapsedMs` 与 `cause`；补图失败另带 `screenshotError` 和 `screenshotDiagnostic`，不覆盖主错误。
+
+## 包含构建的验收
+
+仓库 CI 在推送到 `main`、针对 `main` 的 Pull Request、手动触发及每天 UTC 01:00 运行 `npm run check` 和 `npm run check:browser`（Node.js 20 与 22）。CI 不持有真实设备，因此构建安装、业务流程和物理断连恢复仍需在授权设备上按本清单执行。
+
+确认用户允许修改设备应用后，再运行：
+
+```powershell
+node scripts/check-codex.mjs `
+  --project C:\path\to\my-harmonyos-project `
+  --device DEVICE_ID `
+  --build
+```
+
+它会增加构建、安装和启动步骤，耗时取决于 DevEco 构建环境。多模块工程可追加 `--module feature --artifact feature-signed.hap`，参数会传给 `build_run`。
+
+## Codex 画面验收
+
+以下为单独的宿主画面验收，需要使用 Codex 界面，不属于上述命令行脚本的执行步骤：
+
+1. Agent 调用 `preview_start`，记录 `sessionId`。
+2. 在 Codex 中打开返回的 `previewUrl`，确认页面选择目标设备并显示新画面。
+3. 调用 `observe`、`find` 和 `capture`，确认当前对话返回控件与 MCP 图片。
+4. 用户已授权操作时，调用 `tap_element`，再用 `wait_for` 等待预期目标并重新 `capture`；无法通过控件树定位时，坐标 `tap` 需另以新截图确认目标。
+5. 调用 `preview_stop` 并传入记录的 `sessionId`，确认会话结束。
+
+当前验收确认的是 MCP 和预览页面链路；固定侧边栏仍由 Codex 宿主的 UI 能力决定。
+
+## 历史记录
+
+以下记录保留原始顺序和测试结论。
+
 ## 2026-11-12 旧帧取消诊断与真机对照
 
 当点击已因画面变化超限被拦截，且目标保护区未变化时，新增有大小上限的整帧变化像素计数；只记录匿名汇总，不改变放行规则或自动重试。画面过大、数据无效或计数失败时标记为未完成，不猜测数量。正常通过的点击和滑动不执行该额外计数；受影响的拦截操作会增加扫描成本。
@@ -452,93 +545,6 @@ Codex 重启后，当前宿主 `preview_info` 返回 `previewRecoveryProtocol: 1
 两组顺序执行、样本各 30 次，设备状态和依赖更新可能影响结果，不足以证明并发采集加快或变慢，也不足以判断稳定尾延迟。测试后原面板已恢复。桌面偶发滑动取消仍需在更新后的宿主面板复现并读取本次手势诊断。
 
 > 2026-11-05 校正：本文件此前提前采集期间的点击基准只能反映收到帧的延迟，不能证明帧是在动作完成后采样。`frameAgeMs` 从 MCP 收帧时开始计算，也不能证明截图新鲜度。现已取消提前采集，并在动作结束后重新采样；历史结果保留供参考，不与新口径直接比较。
-
-## 环境检查
-
-先确认 MCP 已注册：
-
-```powershell
-codex mcp get harmonyos-preview
-```
-
-确认设备和项目：
-
-```powershell
-.\scripts\install-codex.ps1 `
-  -ProjectPath C:\path\to\my-harmonyos-project `
-  -RequireDevice `
-  -CheckOnly
-```
-
-## 默认只读验收
-
-该命令先检查所需工具与 `preview_info` 诊断契约，再只读探测设备，验证 `observe`、`find`、`wait_for`、预览地址和新截图。不安装或启动应用，也不点击设备：
-
-```powershell
-node scripts/check-codex.mjs `
-  --project C:\path\to\my-harmonyos-project `
-  --device DEVICE_ID
-```
-
-通过时输出 JSON，其中 `check` 为 `codex: ok`，并包含设备、截图字节数、预览会话编号、`toolsVerified`、`actionVerified`、`waitStatus`、`waitAttempts`、`frameId`、`capturedAt` 和 `connectionCheck`。默认 `actionVerified` 为 `false`；只读查询通过只说明当前 UITest 控件可读取、查找和等待，不代表业务操作已完成。
-
-`connectionCheck.scope` 在命令行模式下为 `isolated_process`；代码调用 `checkCodex` 并传入已有客户端时为 `provided_client`。结果还包含 `runtime`、`deviceStatus` 和固定为 `false` 的 `hostConnectionVerified`。脚本不打开或操作电脑界面，也不自动刷新宿主；独立进程通过不能证明当前 Codex 对话已经重连。
-
-宿主连接应在当前对话单独检查：调用 `preview_info`，传入 `{"deviceId":"目标设备"}`，确认返回 `runtime.diagnosticsVersion: 1` 和 `deviceCheck.status: "connected"`，再实际调用 `observe`、`find` 和 `wait_for`。`runtime.instanceId` 在同一次 MCP 服务启动期间稳定，可帮助区分运行实例；它不代替工具调用验证。
-
-缺少所需工具、`runtime` 或诊断契约不兼容时，验收返回 `MCP_OUTDATED`；检查安装路径并由用户重新连接宿主后再验收。设备自检失败保留具体的设备或 HDC 错误码；独立预览服务失败保留 `serviceDiagnostic` 中的错误，均不统一改写成版本过旧。
-
-## 点击后等待并截图
-
-仅在用户授权这次设备点击后运行。必须显式指定 `--device`，并成对提供 `--tap-selector` 与 `--wait-selector`；参数为 JSON 对象，复用 `find` 的 AND 条件。PowerShell 用单引号包住 JSON：
-
-```powershell
-node scripts/check-codex.mjs `
-  --project C:\path\to\my-harmonyos-project `
-  --device DEVICE_ID `
-  --tap-selector '{"id":"openDetails","clickable":true}' `
-  --wait-selector '{"id":"detailsTitle","text":"详情"}'
-```
-
-将示例 ID 和文字替换为目标应用控件实际暴露的 ID 和文字。运行前让设备停留在目标页面；脚本不会替用户导航寻找入口。
-
-1. 先检查 `--wait-selector` 尚无匹配，避免将已有结果误认为本次操作生效。
-2. 调用 `tap_element`，由工具内部重新查询并检查点击目标：唯一、可点击，且具有有效的 `bounds` 和 `center`；明确禁用、隐藏或采样无效、已超过 1 秒的目标会被拒绝，不发出点击。缺少可见性信息时仍可能通过，检查不能保证目标未被遮挡或界面未发生变化。
-3. 点击最多执行一次；未传 `verify` 时 `verified: false` 不代表业务完成。传入 `verify` 后由工具在同一设备锁内等待预期控件和文字，`verified` 仅在等待结果为 `matched` 时为 `true`；脚本等待上限为 10000 毫秒。
-4. 匹配成功后重新 `capture`，确认返回的是动作后的新截图。
-
-预期目标事前已匹配、控件树不可读、点击候选不唯一或坐标无效时，不应开始点击。预检拒绝保留 `ELEMENT_NOT_FOUND`、`ELEMENT_AMBIGUOUS`、`ELEMENT_NOT_ACTIONABLE` 或 `STALE_OBSERVATION`；布局或 HDC 错误保留具体原因。等待超时或读取失败会报错并尝试新截图；实际点击命令失败或超时时也不重复点击，先查看新证据，不能假定动作未生效。自绘内容、WebView 或未暴露的控件可能无法使用此链路；截图与 UITest 结果也不能独立证明业务提交成功。
-
-默认只读模式不调用 `tap_element` 或坐标 `tap`。动作模式要求本次 MCP 连接提供 `tap_element`；工具缺失按 `MCP_OUTDATED` 处理。在 Codex 中使用新增工具需要宿主重新连接并确认可用，无需重复已完成的旧版只读验收。
-
-失败时输出 `check: "codex: failed"` 和 `error`，进程以非零状态退出；工具失败还包含 `diagnostics.tool` 和结构化结果，不输出截图的 Base64 图片数据。诊断保留 `errorCode`、`stage`、`deviceId`、`elapsedMs` 与 `cause`；补图失败另带 `screenshotError` 和 `screenshotDiagnostic`，不覆盖主错误。
-
-## 包含构建的验收
-
-仓库 CI 在推送到 `main`、针对 `main` 的 Pull Request、手动触发及每天 UTC 01:00 运行 `npm run check` 和 `npm run check:browser`（Node.js 20 与 22）。CI 不持有真实设备，因此构建安装、业务流程和物理断连恢复仍需在授权设备上按本清单执行。
-
-确认用户允许修改设备应用后，再运行：
-
-```powershell
-node scripts/check-codex.mjs `
-  --project C:\path\to\my-harmonyos-project `
-  --device DEVICE_ID `
-  --build
-```
-
-它会增加构建、安装和启动步骤，耗时取决于 DevEco 构建环境。多模块工程可追加 `--module feature --artifact feature-signed.hap`，参数会传给 `build_run`。
-
-## Codex 画面验收
-
-以下为单独的宿主画面验收，需要使用 Codex 界面，不属于上述命令行脚本的执行步骤：
-
-1. Agent 调用 `preview_start`，记录 `sessionId`。
-2. 在 Codex 中打开返回的 `previewUrl`，确认页面选择目标设备并显示新画面。
-3. 调用 `observe`、`find` 和 `capture`，确认当前对话返回控件与 MCP 图片。
-4. 用户已授权操作时，调用 `tap_element`，再用 `wait_for` 等待预期目标并重新 `capture`；无法通过控件树定位时，坐标 `tap` 需另以新截图确认目标。
-5. 调用 `preview_stop` 并传入记录的 `sessionId`，确认会话结束。
-
-当前验收确认的是 MCP 和预览页面链路；固定侧边栏仍由 Codex 宿主的 UI 能力决定。
 
 ## 2026-10-26 真机成功验收记录
 

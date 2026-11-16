@@ -20,14 +20,22 @@ Use this workflow when the user asks to run or inspect a HarmonyOS project on a 
 
 ## Operating rules
 
+### Session and connectivity
+
 - Do not call `preview_start` repeatedly for the same device; it reuses the active session.
 - Keep the `sessionId` returned by `preview_start`; pass it to `preview_stop` so an older instruction cannot stop a newer session.
 - `connected` from `preview_info` only means the live preview has received device frames. Check `deviceCheck.status` instead of treating `connected: false` as proof of an offline device. Without `deviceId`, the check is `not_checked`; with it, the check is `connected`, `disconnected` or `error`.
+
+### Frames and input
+
 - Do not use coordinates from an old screenshot after navigation, scrolling, rotation or a new frame.
 - `capture` always samples the device again, even during live preview. It returns `live: false`, a `frameId` and `capturedAt`; it does not prove an asynchronous page transition has finished.
 - `preview_frame` is MCP App-only. It returns the newest in-memory frame only when its `seq` is newer than `afterSeq`; the image does not enter model content. Pass `waitMs` after an interaction to wait for the next frame instead of polling a stale sequence. Its structured `metrics` reports the source, capture duration, byte size, and capture time; the panel adds local `renderMs`. `preview_action` reports `actionMs` and the acted-on `frameSeq`. Five seconds without frame requests pauses HDC polling; the next frame request resumes the same session.
 - `preview_action` is MCP App-only for one pointer tap or swipe. It checks the current frame, waits for the preview service to acknowledge capture pause, and resumes JPEG sampling after the input completes. The panel uses `nextFrameAfterSeq` to wait for the next frame. Successful model-facing `tap`, `tap_element`, `swipe`, `long_press`, `key_event` and `input_text` calls also request a live-preview refresh.
 - MCP requests may run concurrently; mutating operations for one device are queued in arrival order while reads and waits remain responsive. Send `$/cancelRequest` or `notifications/cancelled` with `params.requestId` to cancel a long wait, screenshot or HDC child process; expect JSON-RPC error `-32800`.
+
+### Observe, tap, and wait
+
 - `observe` defaults to 200 nodes; `find` defaults to 20 candidates. Conditions combine with AND, and matching multiple nodes never triggers an automatic click. Re-read after any navigation, scrolling or rotation.
 - `tap_element` takes `deviceId`, the same AND `selector`, and optional `bundleName`. It queries a fresh tree with a two-candidate limit but checks the full match count. It clicks once only for a unique, clickable target that is not explicitly disabled or hidden, has valid bounds and center, and has a valid observation age from 0 through 1000 ms. Preflight rejection does not click or retry; HDC action failure may already have taken effect, so inspect new evidence before deciding what to do.
 - A successful `tap_element` returns `action: "tap"`, `target` and `observedAt`. Without `verify`, `verified` is `false`; with `verify`, it is `true` only when the expected condition matches. Command execution does not confirm business completion; follow with `wait_for` and `capture`. It does not atomically eliminate UI changes between reading and tapping or make custom-rendered controls locatable.
@@ -35,10 +43,16 @@ Use this workflow when the user asks to run or inspect a HarmonyOS project on a 
 - `wait_for` uses the same AND selector as `find`; `state` is `present` (default) or `absent`. `timeoutMs` is an integer from 1 to 30000 (default 5000), and `intervalMs` from 100 to 5000 (default 500). Optional `bundleName` scopes the layout. It observes only and never clicks.
 - Wait for changed text with both its ID and the expected exact `text`, using `present`. `absent` requires a nonempty readable tree without matches; it cannot prove prior presence, custom-rendered content or business completion. Matching checks the full tree even though `lastObservation` retains at most 200 nodes and 20 matches, with totals and truncation flags.
 - Inspect `status` (`matched`, `timeout`, `observation_failed`), `attempts`, `elapsedMs`, `lastObservation` and `warnings`. Failures include `error`, set `isError: true` and attempt a fresh screenshot. Screenshot capture has a 3-second budget, and each HDC cleanup has up to 2 seconds; final wait cleanup plus screenshot work can add about 7 seconds after the wait deadline. `elapsedMs` includes wait cleanup, not screenshot work. Preserve `screenshotError`; do not automatically repeat a failed action.
+
+### Results and host control
+
 - Use the structured result fields (`deviceId`, `live`, `sessionId`, `connected`) instead of parsing text when available.
 - When the Codex `open_in_codex` host action is available, pass `{ target: { type: "browser", url: previewUrl }, placement: "right" }` so the preview opens beside the conversation.
 - `preview_open` adds the global sidebar entry, but the user must choose the entry's menu action to pin it the first time; there is no MCP API that can set the host's pin state.
 - When the host opens a new page, call `preview_info` first and reopen its `previewUrl`; do not create a second session when `restored: true`.
+
+### Authorization
+
 - Ask before `build_run` if the user did not request a build or device state change.
 
 ## Minimal prompt pattern

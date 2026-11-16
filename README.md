@@ -42,4 +42,4 @@ codex mcp get harmonyos-preview
 
 - [使用说明与配置](docs/codex-usage.md)
 - [真机验收清单](docs/codex-acceptance.md)
-- [Codex 工作流技能](skills/harmonyos-preview-codex/SKILL.md)
+- [Codex 工作流技能](skills/harmonyos-preview-codex/SKILL.md)（供 Agent 使用）

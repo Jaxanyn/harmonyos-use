@@ -2,6 +2,18 @@
 
 HarmonyOS Use 的 MCP 注册名和命令为 `harmonyos-preview`，预览面板名称为 HarmonyOS Preview；现有环境变量保持兼容。
 
+## 快速导航
+
+- [安装与连接](#安装-mcp)
+- [打开预览和操作设备](#标准使用流程)
+- [配置与快速输入](#配置与快速输入)
+- [预览取帧与指标](#预览取帧与指标)
+- [性能基准](#性能基准)
+- [连接自检与错误证据](#连接自检与错误证据)
+- [页面读取和目标查询](#页面读取和目标查询)
+- [验证](#验证)
+- [常见问题](#常见问题)
+
 ## 安装 MCP
 
 建议使用 Node.js 22 安装并运行插件。项目目前声明 Node.js 20+，但上游依赖 `@openai/mcp-extensions@0.1.0` 声明 Node.js 22+；使用 Node.js 20 时，npm 默认安装可能提示 `EBADENGINE`，开启 `engine-strict` 时会因该依赖拒绝安装。可先检查当前版本和严格检查配置：
@@ -141,23 +153,49 @@ MCP 请求可以并发处理；同一 MCP 进程内，同一设备上的点击�
 - `previewSubscriptionProtocol`：面板订阅协议版本，当前为 `1`
 - `subscriberId`：仅请求 `subscriber: true` 时返回，用于该面板续期和释放
 
-`preview_frame` 是 MCP App 专用的实时帧接口，参数 `afterSeq` 用于去重，动作后的读取可传 `waitMs` 等待下一个新帧。结构化结果中的 `metrics` 提供 `source`、`captureMs`、`captureStages`、`frameBytes`、`capturedAt`、`width`、`height`、`deviceWidth` 和 `deviceHeight`。缩放后的 JPEG 优先通过一次 HDC 命令采集和传输，`captureStages.combinedMs` 表示两者合计耗时；设备不支持或响应未通过标记与 JPEG 基本结构检查时回退到文件传输，返回 `snapshotMs`、`transferMs` 和 `readMs`。基本结构检查不能保证图片一定能完整解码。面板内部还会记录本地 `renderMs`，但底部指标已隐藏；`preview_action` 返回 `actionMs`、`frameSeq` 和 `nextFrameAfterSeq`，用于判断点击响应瓶颈并跳过动作前帧。`preview_frame` 返回 `content: []`，图片只放在结构化结果中，不进入模型上下文。`capture` 仍然每次重新采集设备画面，适合模型在动作后取得独立证据。
+### 预览取帧与指标
+
+`preview_frame` 是 MCP App 专用的实时帧接口，参数 `afterSeq` 用于去重，动作后的读取可传 `waitMs` 等待下一个新帧。结构化结果中的 `metrics` 提供 `source`、`captureMs`、`captureStages`、`frameBytes`、`capturedAt`、`width`、`height`、`deviceWidth` 和 `deviceHeight`。
+
+缩放后的 JPEG 优先通过一次 HDC 命令采集和传输，`captureStages.combinedMs` 表示两者合计耗时；设备不支持或响应未通过标记与 JPEG 基本结构检查时回退到文件传输，返回 `snapshotMs`、`transferMs` 和 `readMs`。基本结构检查不能保证图片一定能完整解码。
+
+面板内部还会记录本地 `renderMs`，但底部指标已隐藏；`preview_action` 返回 `actionMs`、`frameSeq` 和 `nextFrameAfterSeq`，用于判断点击响应瓶颈并跳过动作前帧。`preview_frame` 返回 `content: []`，图片只放在结构化结果中，不进入模型上下文。`capture` 仍然每次重新采集设备画面，适合模型在动作后取得独立证据。
+
+### 面板显示与恢复
 
 预览区使用面板剩余空间，画面按设备比例完整显示；`Fit` 恢复自适应尺寸，放大后可以滚动画面。工具栏提供设备“返回”和“主页”，操作会等待动作后的新帧；新帧本身不证明业务操作成功。点击仅作用于图片，四周留白不发送设备输入；手势期间画面位置或尺寸变化时，该手势会取消，避免误点。
 
-取帧或解码失败、动作在输入前因帧过期被拒绝，或动作已经发送但结果未知时，面板可保留旧画面并显示 `Old frame — interaction unavailable`。此时点击、滑动、设备返回与主页及构建操作不可用；恢复请求绑定当前设备、会话和序号，只有确认请求后的新帧并完成解码才恢复交互。动作结果未知时先检查设备，再按需点击 `Retry frame` 手动取新帧；不会自动重发原动作。其他刷新失败后也可选择 `Retry frame` 或停止后重新启动预览。明确断连、切换设备或会话变化时仍会清除旧画面；刷新成功不代表原动作业务成功。
+取帧或解码失败、动作在输入前因帧过期被拒绝，或动作已经发送但结果未知时，面板可保留旧画面并显示 `Old frame — interaction unavailable`。此时点击、滑动、设备返回与主页及构建操作不可用；恢复请求绑定当前设备、会话和序号，只有确认请求后的新帧并完成解码才恢复交互。
 
-坐标工具 `tap`、`swipe`、`long_press` 和带坐标的 `input_text` 可携带 `frameId`、`seq` 与 `coordinateSpace`。将 `coordinateSpace` 设为 `frame` 时，工具会按该帧的 `width`/`height` 与 `deviceWidth`/`deviceHeight` 映射到 HDC 坐标；帧身份或序号不匹配、预览未连接、缺少尺寸或检测到屏幕方向变化时会拒绝本次输入。方向失效后停止并重新启动预览会重新校准设备尺寸。MCP App 的 `preview_action` 也会校验可选 `frameId` 与 `seq`。未传绑定字段时继续按原有 device 坐标兼容处理；HTTP `/api/tap` 保持无状态，只接受 device 坐标。
+动作结果未知时先检查设备，再按需点击 `Retry frame` 手动取新帧；不会自动重发原动作。其他刷新失败后也可选择 `Retry frame` 或停止后重新启动预览。明确断连、切换设备或会话变化时仍会清除旧画面；刷新成功不代表原动作业务成功。
 
-面板动作开始时会中止正在进行的预览 JPEG 采集，并等待预览服务确认暂停；确认失败时不执行动作。HDC 输入结束后才恢复采集，面板通过 `nextFrameAfterSeq` 等待后续帧。预览首帧保留设备原始尺寸并用于推导设备尺寸，后续 JPEG 按 `HARMONY_PREVIEW_SCALE` 采样（默认 `0.75`，范围 `0.25–1`）；设为 `1` 使用原始分辨率，设为 `0.4` 可减少采集与传输负担。显示细节不超过设备原始画面，面板坐标会映射回设备原始像素。
+### 坐标绑定与画面刷新
+
+坐标工具 `tap`、`swipe`、`long_press` 和带坐标的 `input_text` 可携带 `frameId`、`seq` 与 `coordinateSpace`。将 `coordinateSpace` 设为 `frame` 时，工具会按该帧的 `width`/`height` 与 `deviceWidth`/`deviceHeight` 映射到 HDC 坐标；帧身份或序号不匹配、预览未连接、缺少尺寸或检测到屏幕方向变化时会拒绝本次输入。
+
+方向失效后停止并重新启动预览会重新校准设备尺寸。MCP App 的 `preview_action` 也会校验可选 `frameId` 与 `seq`。未传绑定字段时继续按原有 device 坐标兼容处理；HTTP `/api/tap` 保持无状态，只接受 device 坐标。
+
+面板动作开始时会中止正在进行的预览 JPEG 采集，并等待预览服务确认暂停；确认失败时不执行动作。
+
+HDC 输入结束后才恢复采集，面板通过 `nextFrameAfterSeq` 等待后续帧。预览首帧保留设备原始尺寸并用于推导设备尺寸，后续 JPEG 按 `HARMONY_PREVIEW_SCALE` 采样（默认 `0.75`，范围 `0.25–1`）；设为 `1` 使用原始分辨率，设为 `0.4` 可减少采集与传输负担。显示细节不超过设备原始画面，面板坐标会映射回设备原始像素。
 
 成功的预览点击在 `preview_action` 结果的 `metrics.inputMethod` 中报告实际输入路径：`uinput` 为快速输入，`uitest` 为标准点击。预览面板底部的指标和操作诊断已隐藏；面板仍在内部维护本次会话的统计及最近 10 条取消原因，停止或切换会话时清空。收到新帧不证明业务操作成功，需观察应用画面确认。`fastTapConfiguredForDevice` 只表示配置匹配，不证明实际使用了快速路径；失败或结果未知时也不应猜测输入是否生效。
 
 模型调用 `tap`、`tap_element`、`swipe`、`long_press`、`key_event` 或 `input_text` 成功后，也会立即刷新正在运行的实时预览，减少等待下一轮轮询的时间。
 
-可用 `npm run benchmark:preview -- --device <设备 ID> --warmup 1 --actions 10` 重复执行真机预览点击基准；基准 JSON 会输出实际 `scale`、每次动作的 `actionRoundTripMs`、`actionMs`、`actionPrepareMs`、`actionInputMs`、`captureMs`、`frameWaitMs`、`frameAgeMs`、分段采集耗时（合并路径为 `combinedMs`，文件回退路径为 `snapshotMs`、`transferMs`、`readMs`）、帧大小和分辨率，以及 `min/p50/p95/max/avg` 汇总。`--warmup` 样本不计入汇总，用于减少首帧和 HDC 冷启动抖动的影响；`--x`、`--y` 可指定测试坐标，默认使用 `1,1`；运行前需确认该坐标可安全重复点击。`--max-action-p95` 检查 `actionRoundTripMs` 的 p95，`--max-capture-p95` 检查采集耗时 p95，超过阈值时以非零状态退出。
+### 性能基准
 
-`measurementScope` 明确基准使用独立 MCP 进程、测量点击到动作后帧的链路，不包括面板渲染，也不验证业务结果。脚本不检查其他采集会话（`otherCaptureSessions: "not_checked"`）；比较前应关闭其他预览，保持相同设备、页面和采样比例。分位数采用最近秩方法（`nearest_rank`）；少于 100 个动作样本时，报告会提示样本较少。10 次适合快速排查，即使阈值通过，也不能据单次 p95 宣称稳定尾延迟达标；应以更多样本的重复测量比较。
+可用 `npm run benchmark:preview -- --device <设备 ID> --warmup 1 --actions 10` 重复执行真机预览点击基准；基准 JSON 会输出实际 `scale`、每次动作的 `actionRoundTripMs`、`actionMs`、`actionPrepareMs`、`actionInputMs`、`captureMs`、`frameWaitMs`、`frameAgeMs`、分段采集耗时（合并路径为 `combinedMs`，文件回退路径为 `snapshotMs`、`transferMs`、`readMs`）、帧大小和分辨率，以及 `min/p50/p95/max/avg` 汇总。
+
+`--warmup` 样本不计入汇总，用于减少首帧和 HDC 冷启动抖动的影响；`--x`、`--y` 可指定测试坐标，默认使用 `1,1`；运行前需确认该坐标可安全重复点击。
+
+`--max-action-p95` 检查 `actionRoundTripMs` 的 p95，`--max-capture-p95` 检查采集耗时 p95，超过阈值时以非零状态退出。
+
+`measurementScope` 明确基准使用独立 MCP 进程、测量点击到动作后帧的链路，不包括面板渲染，也不验证业务结果。
+
+脚本不检查其他采集会话（`otherCaptureSessions: "not_checked"`）；比较前应关闭其他预览，保持相同设备、页面和采样比例。
+
+分位数采用最近秩方法（`nearest_rank`）；少于 100 个动作样本时，报告会提示样本较少。10 次适合快速排查，即使阈值通过，也不能据单次 p95 宣称稳定尾延迟达标；应以更多样本的重复测量比较。
 
 采集分段中，`combinedMs` 为合并采集及传输；`snapshotMs`、`transferMs` 和 `readMs` 表示文件采集路径，无法仅凭这些值确定是否发生回退。如果合并尝试失败后回退，文件各分段不包含失败尝试及清理耗时，不能把它们相加作为完整截图耗时。
 
@@ -189,6 +227,8 @@ MCP 请求可以并发处理；同一 MCP 进程内，同一设备上的点击�
 读取或等待失败后的截图只是辅助证据，不替换主错误。成功补图保留 `screenshot` 中的 `frameId`、`capturedAt` 等新截图元数据；补图失败保留 `screenshotError`，并增加 `screenshotDiagnostic`。例如 `wait_for` 的主错误仍可为 `WAIT_TIMEOUT`，同时 `screenshotDiagnostic.errorCode` 为 `CAPTURE_FAILED`。先检查现有证据，再决定下一步；不会因诊断结果自动重复点击或输入。
 
 HTTP 设备请求失败和 WebSocket `error` 消息也保留上述诊断字段；轮询失败的 `preview-status` 通过 `diagnostic` 附带原因。只有已确认的 `DEVICE_OFFLINE` 使用 `reason: "device-disconnected"`，其他截图异常使用 `capture-failed`，不能仅凭截图失败断定设备离线。
+
+### 截图返回结果
 
 `capture` 每次都重新采集设备画面，不返回实时预览的缓存。调用应在动作完成后进行；页面异步加载或动画仍可能尚未完成，需根据新画面继续判断。
 

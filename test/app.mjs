@@ -306,6 +306,101 @@ async function start(panel, id = 'A', width = 1260, height = 2720) {
   assert.ok(!panel.sent.some((message) => ['preview_start', 'preview_stop'].includes(message.params?.name)));
 }
 
+// BFCache restores a running panel only after a fresh, device-bound frame.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.windowListeners.get('pagehide')({ persisted: true });
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  assert.equal(panel.elements.stage.hidden, true);
+  panel.windowListeners.get('pageshow')({ persisted: true });
+  panel.windowListeners.get('pageshow')({ persisted: true });
+  await flush();
+  const refresh = panel.take('preview_frame');
+  assert.equal(refresh.params.arguments.forceRefresh, true);
+  assert.equal(refresh.params.arguments.deviceId, 'A');
+  assert.equal(refresh.params.arguments.sessionId, 'session-A');
+  assert.equal(panel.elements['nav-back'].disabled, true, 'Do not interact before the resumed frame');
+  assert.ok(!panel.sent.some((message) => ['preview_start', 'preview_frame', 'preview_action'].includes(message.params?.name)), 'Repeated pageshow must not duplicate recovery');
+  await panel.reply(refresh, imageResult('A'));
+  assert.equal(panel.elements.stage.hidden, false);
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+}
+
+// BFCache must not start an idle panel or prevent the user from starting it later.
+{
+  const panel = await readyPanel();
+  panel.windowListeners.get('pagehide')({ persisted: true });
+  panel.windowListeners.get('pageshow')({ persisted: true });
+  await flush();
+  assert.ok(!panel.sent.some((message) => ['preview_start', 'preview_frame'].includes(message.params?.name)));
+  assert.equal(panel.elements.start.disabled, false);
+  await start(panel);
+}
+
+// BFCache while an action is in flight keeps its result unknown until the user requests a fresh frame.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  const action = panel.take('preview_action');
+  panel.windowListeners.get('pagehide')({ persisted: true });
+  panel.windowListeners.get('pageshow')({ persisted: true });
+  await flush();
+  assert.match(panel.elements.status.textContent, /result unknown/i);
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  assert.equal(panel.elements['retry-frame'].hidden, false);
+  assert.ok(!panel.sent.some((message) => ['preview_frame', 'preview_action'].includes(message.params?.name)));
+  await panel.reply(action, textResult({ metrics: { nextFrameAfterSeq: action.params.arguments.seq } }));
+  assert.equal(panel.elements['nav-back'].disabled, true, 'Late action completion cannot clear uncertainty');
+  assert.ok(!panel.sent.some((message) => ['preview_frame', 'preview_action'].includes(message.params?.name)));
+  panel.elements['retry-frame'].dispatch('click');
+  await flush();
+  const refresh = panel.take('preview_frame');
+  assert.equal(refresh.params.arguments.forceRefresh, true);
+  await panel.reply(refresh, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.match(panel.elements.status.textContent, /result unknown/i);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+}
+
+// Stop, device switching, and teardown override BFCache restoration.
+for (const cancellation of ['stop', 'switch', 'teardown']) {
+  const panel = await readyPanel();
+  await start(panel);
+  panel.windowListeners.get('pagehide')({ persisted: true });
+  if (cancellation === 'stop') panel.elements.stop.dispatch('click');
+  else if (cancellation === 'switch') {
+    panel.elements.devices.value = 'B';
+    panel.elements.devices.dispatch('change');
+  } else panel.windowListeners.get('pagehide')({ persisted: false });
+  panel.windowListeners.get('pageshow')({ persisted: true });
+  await flush();
+  assert.ok(!panel.sent.some((message) => ['preview_start', 'preview_frame', 'preview_action'].includes(message.params?.name)), `${cancellation} must not revive the old preview`);
+  assert.equal(panel.elements.stage.hidden, true);
+}
+
+// A late BFCache refresh cannot revive a panel stopped or switched after pageshow.
+for (const cancellation of ['stop', 'switch', 'teardown']) {
+  const panel = await readyPanel();
+  await start(panel);
+  panel.windowListeners.get('pagehide')({ persisted: true });
+  panel.windowListeners.get('pageshow')({ persisted: true });
+  await flush();
+  const refresh = panel.take('preview_frame');
+  if (cancellation === 'stop') panel.elements.stop.dispatch('click');
+  else if (cancellation === 'switch') {
+    panel.elements.devices.value = 'B';
+    panel.elements.devices.dispatch('change');
+  } else panel.windowListeners.get('pagehide')({ persisted: false });
+  await panel.reply(refresh, imageResult('A'));
+  assert.equal(panel.elements.stage.hidden, true, `${cancellation}: ignore a late resumed frame`);
+  assert.ok(!panel.sent.some((message) => ['preview_start', 'preview_frame', 'preview_action'].includes(message.params?.name)), `${cancellation}: do not resume the old preview`);
+  assert.ok(![...panel.timers.values()].some(({ ms }) => ms === pollIntervalMs), `${cancellation}: do not poll the old preview`);
+}
+
 // An incomplete subscription cannot be used or stopped without a panel token.
 {
   const panel = await readyPanel();
@@ -329,7 +424,7 @@ async function start(panel, id = 'A', width = 1260, height = 2720) {
   assert.equal(panel.elements.devices.value, 'B');
 }
 
-// An expired subscription must reset the panel instead of polling or retrying with a dead token.
+// Expired subscriptions are replaced for the selected device without replaying input.
 for (const phase of ['poll', 'action', 'recovery']) {
   const panel = await readyPanel();
   await start(panel);
@@ -345,12 +440,169 @@ for (const phase of ['poll', 'action', 'recovery']) {
   }
   const request = panel.take(phase === 'action' ? 'preview_action' : 'preview_frame');
   await panel.reply(request, { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_subscription' }), isError: true });
-  assert.match(panel.elements.status.textContent, /subscription expired or changed/i);
-  assert.equal(panel.elements.stage.hidden, true);
-  assert.equal(panel.elements.start.disabled, false);
-  assert.equal(panel.elements['retry-frame'].hidden, true);
-  const release = panel.take('preview_stop');
-  assert.deepEqual({ ...release.params.arguments }, { sessionId: 'session-A', subscriberId: 'subscriber-session-A' });
+  assert.equal(panel.elements['nav-back'].disabled, true, 'Input stays disabled until a fresh frame is decoded');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Never replay an input');
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry, 'A failed subscription schedules automatic recovery');
+  await panel.runTimer(retry.ms);
+  const restart = panel.take('preview_start');
+  assert.deepEqual({ ...restart.params.arguments }, { deviceId: 'A', subscriber: true });
+  await panel.reply(restart, textResult({ sessionId: 'recovered-session', deviceId: 'A' }));
+  const fresh = panel.take('preview_frame');
+  assert.equal(fresh.params.arguments.sessionId, 'recovered-session');
+  assert.equal(fresh.params.arguments.subscriberId, 'subscriber-recovered-session');
+  await panel.reply(fresh, imageResult('A'));
+  assert.equal(panel.elements.stage.hidden, false, 'Show the new frame after automatic recovery');
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Recovery must not replay the earlier input');
+  for (const message of panel.sent.filter((entry) => entry.params?.name === 'preview_stop')) {
+    assert.ok(message.params.arguments.subscriberId, 'Recovery must not stop a shared session');
+  }
+}
+
+// An action followed by subscription loss needs user confirmation before input is enabled again.
+for (const failure of ['expired', 'changed']) {
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  const action = panel.take('preview_action');
+  await panel.reply(action, textResult({ metrics: { nextFrameAfterSeq: action.params.arguments.seq } }));
+  const postActionFrame = panel.take('preview_frame');
+  let response = { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_subscription' }), isError: true };
+  if (failure === 'changed') {
+    response = imageResult('A');
+    response.structuredContent.sessionId = 'different-session';
+  }
+  await panel.reply(postActionFrame, response);
+  assert.match(panel.elements.status.textContent, /result unknown/i);
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry, `${failure}: subscription recovery should be scheduled`);
+  await panel.runTimer(retry.ms);
+  const restart = panel.take('preview_start');
+  assert.deepEqual({ ...restart.params.arguments }, { deviceId: 'A', subscriber: true });
+  await panel.reply(restart, textResult({ sessionId: 'reconnected-session', deviceId: 'A' }));
+  assert.match(panel.elements.status.textContent, /result unknown/i, 'Reconnect cannot prove what happened to the earlier action');
+  assert.equal(panel.elements['nav-back'].disabled, true, 'Reconnecting alone must not enable interaction');
+  assert.equal(panel.elements['retry-frame'].hidden, false, 'The user must check the device and request a fresh frame');
+  assert.ok(!panel.sent.some((message) => ['preview_action', 'preview_frame'].includes(message.params?.name)), 'Do not replay input or confirm the outcome automatically');
+  panel.elements['retry-frame'].dispatch('click');
+  await flush();
+  const fresh = panel.take('preview_frame');
+  assert.equal(fresh.params.arguments.forceRefresh, true);
+  await panel.reply(fresh, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.match(panel.elements.status.textContent, /result unknown/i, 'A new frame does not prove the earlier action succeeded');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+}
+
+// A disconnect after input must not turn a later frame into implicit user confirmation.
+for (const failure of ['disconnected', 'error']) {
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  const action = panel.take('preview_action');
+  await panel.reply(action, textResult({ metrics: { nextFrameAfterSeq: action.params.arguments.seq } }));
+  const postAction = panel.take('preview_frame');
+  const response = failure === 'disconnected'
+    ? { structuredContent: { deviceId: 'A', connected: false, sessionId: 'session-A', seq: action.params.arguments.seq, frame: null } }
+    : { isError: true, content: [{ type: 'text', text: 'Device disconnected' }] };
+  await panel.reply(postAction, response);
+  assert.match(panel.elements.status.textContent, /result unknown/i, `${failure}: report the uncertain input`);
+  assert.equal(panel.elements['nav-back'].disabled, true, `${failure}: disable input until confirmation`);
+  assert.equal(panel.elements['retry-frame'].hidden, false, `${failure}: offer explicit frame retry`);
+
+  // If the implementation continues background polling, its frame cannot unblock input.
+  if ([...panel.timers.values()].some(({ ms }) => ms === pollIntervalMs)) {
+    await panel.runPoll();
+    await panel.reply(panel.take('preview_frame'), imageResult('A'));
+    assert.equal(panel.elements['nav-back'].disabled, true, `${failure}: device reconnection is not user confirmation`);
+    assert.match(panel.elements.status.textContent, /result unknown/i);
+  }
+  panel.elements['retry-frame'].dispatch('click');
+  await flush();
+  const retry = panel.take('preview_frame');
+  assert.equal(retry.params.arguments.forceRefresh, true);
+  await panel.reply(retry, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, false, `${failure}: allow input after explicit retry and a new frame`);
+  assert.match(panel.elements.status.textContent, /result unknown/i, 'A new frame cannot prove the business result');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Never replay input automatically');
+}
+
+// A session ID change also requires a new subscription before interaction.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  await panel.runPoll();
+  const changed = imageResult('A');
+  changed.structuredContent.sessionId = 'different-session';
+  await panel.reply(panel.take('preview_frame'), changed);
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry, 'An unexpected session change must schedule recovery');
+  await panel.runTimer(retry.ms);
+  assert.deepEqual({ ...panel.take('preview_start').params.arguments }, { deviceId: 'A', subscriber: true });
+}
+
+// A failed restart is retried with a delay, while leaving device input disabled.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  await panel.runPoll();
+  await panel.reply(panel.take('preview_frame'), { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_subscription' }), isError: true });
+  let retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry, 'Subscription recovery must not retry in a tight loop');
+  await panel.runTimer(retry.ms);
+  await panel.reply(panel.take('preview_start'), { ...textResult({ errorCode: 'HDC_TIMEOUT', stage: 'preview_start' }), isError: true });
+  retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry, 'A failed restart must schedule another attempt');
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  await panel.runTimer(retry.ms);
+  assert.deepEqual({ ...panel.take('preview_start').params.arguments }, { deviceId: 'A', subscriber: true });
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+}
+
+// Another device's shared session is never stopped to make recovery succeed.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  await panel.runPoll();
+  await panel.reply(panel.take('preview_frame'), { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_subscription' }), isError: true });
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  await panel.runTimer(retry.ms);
+  await panel.reply(panel.take('preview_start'), { ...textResult({ errorCode: 'PREVIEW_IN_USE', stage: 'preview_subscription' }), isError: true });
+  const releases = panel.sent.filter((message) => message.params?.name === 'preview_stop');
+  assert.ok(releases.every((message) => message.params.arguments.sessionId === 'session-A' && message.params.arguments.subscriberId === 'subscriber-session-A'));
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
+  assert.ok([...panel.timers.values()].some(({ ms }) => ms > retry.ms && ms <= 10000), 'A conflicting shared session is retried without disrupting it');
+}
+
+// User cancellation wins over a pending restart and releases only its late subscriber.
+for (const cancellation of ['stop', 'switch', 'teardown']) {
+  const panel = await readyPanel();
+  await start(panel);
+  await panel.runPoll();
+  await panel.reply(panel.take('preview_frame'), { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_subscription' }), isError: true });
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry);
+  await panel.runTimer(retry.ms);
+  const pending = panel.take('preview_start');
+  if (cancellation === 'stop') panel.elements.stop.dispatch('click');
+  else if (cancellation === 'switch') {
+    panel.elements.devices.value = 'B';
+    panel.elements.devices.dispatch('change');
+  } else panel.windowListeners.get('pagehide')();
+  await panel.reply(pending, textResult({ sessionId: 'late-session', deviceId: 'A', subscriberId: 'late-subscriber' }));
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_frame'), `${cancellation} must ignore a late start`);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), `${cancellation} must not replay input`);
+  const releases = panel.sent.filter((message) => message.params?.name === 'preview_stop');
+  if (cancellation !== 'teardown') {
+    assert.ok(releases.some((message) => message.params.arguments.sessionId === 'late-session' && message.params.arguments.subscriberId === 'late-subscriber'));
+  }
+  assert.ok(releases.every((message) => message.params.arguments.subscriberId), 'Never stop another panel\'s subscription');
+  assert.ok(![...panel.timers.values()].some(({ ms }) => ms >= 500 && ms <= 10000), `${cancellation} must cancel recovery timers`);
 }
 
 // Screen queries poll promptly without asking the device to take another screenshot.
@@ -1409,7 +1661,8 @@ for (const action of ['tap', 'back', 'home']) {
   await panel.reply(preflight, otherSession);
   assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
   assert.match(panel.elements.status.textContent, /session/i);
-  assert.equal(panel.elements.start.disabled, false, 'A replaced session must allow starting preview again');
+  assert.equal(panel.elements.start.disabled, true, 'A replaced session is recovered automatically');
+  assert.equal(panel.elements.stop.disabled, false, 'The user can stop automatic recovery');
 }
 
 // Only decoded image dimensions determine tap coordinates, including rotated screens and edge clamping.
@@ -2191,18 +2444,13 @@ for (const frameOutcome of ['frame', 'timeout', 'disconnect']) {
   if (frameOutcome === 'frame') await panel.reply(next, imageResult('A'));
   else if (frameOutcome === 'timeout') await panel.reply(next, { structuredContent: { deviceId: 'A', connected: true, frame: null } });
   else await panel.reply(next, { isError: true, content: [{ type: 'text', text: 'device disconnected' }] });
-  assert.match(panel.elements.status.textContent, frameOutcome === 'frame' ? /Tap sent; new frame decoded.*total \d+ms/ : frameOutcome === 'timeout' ? /Action sent; no new frame yet. Result unknown/ : /Action sent; new frame unavailable: device disconnected/);
-  assert.equal(panel.elements.build.disabled, frameOutcome === 'timeout');
+  assert.match(panel.elements.status.textContent, frameOutcome === 'frame' ? /Tap sent; new frame decoded.*total \d+ms/ : frameOutcome === 'timeout' ? /Action sent; no new frame yet. Result unknown/ : /Action sent; result unknown/i);
+  assert.equal(panel.elements.build.disabled, frameOutcome !== 'frame');
   assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Never retry an action automatically');
   if (frameOutcome === 'frame') {
     await panel.runPoll();
     await panel.reply(panel.take('preview_frame'), imageResult('A'));
     assert.match(panel.elements.status.textContent, /new frame decoded/, 'Leave feedback visible across the next poll');
-  } else if (frameOutcome === 'disconnect') {
-    panel.advance(5000);
-    await panel.runPoll();
-    await panel.reply(panel.take('preview_frame'), imageResult('A'));
-    assert.match(panel.elements.status.textContent, /Action sent;/, 'Keep uncertain results visible until the next user action');
   } else {
     assert.equal(panel.elements['retry-frame'].hidden, false);
     assert.ok(![...panel.timers.values()].some(({ ms }) => ms === pollIntervalMs), 'Unknown result must not auto-poll');
@@ -2370,6 +2618,207 @@ for (const [errorCode, stage] of [['STALE_PREVIEW_FRAME', 'preview_action'], ['S
     assert.equal(panel.elements['retry-frame'].hidden, false, 'Uncertain result requires manual recovery');
     assert.ok(!panel.sent.some((message) => ['preview_action', 'preview_frame'].includes(message.params?.name)), 'Uncertain input must not be retried');
   }
+}
+
+// An uncertain input result requires a manual frame retry and remains visible afterward.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'HDC_TIMEOUT', stage: 'device_input' }), isError: true });
+  assert.match(panel.elements.status.textContent, /result unknown/i);
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  assert.ok(![...panel.timers.values()].some(({ ms }) => ms >= 500 && ms <= 10000), 'Do not automatically reopen interaction after an uncertain result');
+  panel.elements['retry-frame'].dispatch('click');
+  await flush();
+  const frame = panel.take('preview_frame');
+  assert.equal(frame.params.arguments.forceRefresh, true);
+  await panel.reply(frame, imageResult('A'));
+  assert.match(panel.elements.status.textContent, /result unknown/i, 'A fresh frame cannot prove the earlier action result');
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Frame recovery never replays input');
+}
+
+// After an uncertain action, a disconnected manual retry must not accept a cached wake-up frame.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'HDC_TIMEOUT', stage: 'device_input' }), isError: true });
+  assert.match(panel.elements.status.textContent, /result unknown/i);
+  panel.elements['retry-frame'].dispatch('click');
+  await flush();
+  const refresh = panel.take('preview_frame');
+  assert.equal(refresh.params.arguments.forceRefresh, true);
+  await panel.reply(refresh, { structuredContent: { deviceId: 'A', connected: false, sessionId: 'session-A', seq: refresh.params.arguments.afterSeq, frame: null } });
+  assert.equal(panel.elements['nav-back'].disabled, true, 'A disconnected retry cannot enable input');
+  if (panel.sent.some((message) => message.params?.name === 'preview_frame')) {
+    const initialWake = panel.take('preview_frame');
+    assert.notEqual(initialWake.params.arguments.forceRefresh, true);
+    await panel.reply(initialWake, imageResult('A'));
+    assert.equal(panel.elements['nav-back'].disabled, true, 'The first cached frame cannot enable input');
+  }
+  const retry = [...panel.timers.values()].find(({ ms }) => ms === pollIntervalMs || (ms >= 500 && ms <= 10000));
+  assert.ok(retry, 'Keep attempting to restore the preview');
+  await panel.runTimer(retry.ms);
+  const wake = panel.take('preview_frame');
+  assert.notEqual(wake.params.arguments.forceRefresh, true, 'Wake the stream before forcing a new frame');
+  await panel.reply(wake, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, true, 'An ordinary cached frame cannot enable input');
+  const fresh = panel.take('preview_frame');
+  assert.equal(fresh.params.arguments.forceRefresh, true, 'Require a confirmed new frame after waking');
+  await panel.reply(fresh, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.match(panel.elements.status.textContent, /result unknown/i, 'A new frame cannot establish business outcome');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Never replay the original input');
+}
+
+// Failed automatic refresh after a known pre-input rejection retries with backoff.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'STALE_PREVIEW_FRAME', stage: 'preview_action', inputNotSent: true }), isError: true });
+  await panel.reply(panel.take('preview_frame'), { isError: true, content: [{ type: 'text', text: 'refresh failed' }] });
+  const firstRetry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(firstRetry, 'A refresh failure schedules another attempt');
+  await panel.runTimer(firstRetry.ms);
+  const firstWake = panel.take('preview_frame');
+  assert.notEqual(firstWake.params.arguments.forceRefresh, true);
+  await panel.reply(firstWake, imageResult('A'));
+  const firstFrame = panel.take('preview_frame');
+  assert.equal(firstFrame.params.arguments.forceRefresh, true);
+  await panel.reply(firstFrame, { isError: true, content: [{ type: 'text', text: 'refresh failed' }] });
+  const secondRetry = [...panel.timers.values()].find(({ ms }) => ms > firstRetry.ms && ms <= 10000);
+  assert.ok(secondRetry, 'Repeated frame failures back off');
+  assert.equal(panel.elements['nav-back'].disabled, true);
+  await panel.runTimer(secondRetry.ms);
+  const secondWake = panel.take('preview_frame');
+  assert.notEqual(secondWake.params.arguments.forceRefresh, true);
+  await panel.reply(secondWake, imageResult('A'));
+  await panel.reply(panel.take('preview_frame'), imageResult('A'));
+  assert.match(panel.elements.status.textContent, /not sent/i);
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Frame recovery never replays input');
+}
+
+// A retry delayed beyond the capture lease wakes the stream without accepting the wake-up frame.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  const oldImage = panel.elements.stage;
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'STALE_PREVIEW_FRAME', stage: 'preview_action', inputNotSent: true }), isError: true });
+  await panel.reply(panel.take('preview_frame'), { isError: true, content: [{ type: 'text', text: 'refresh failed' }] });
+  for (const expectedDelay of [1000, 2000, 4000, 8000]) {
+    await panel.runTimer(expectedDelay);
+    const wake = panel.take('preview_frame');
+    assert.notEqual(wake.params.arguments.forceRefresh, true, 'A retry must first wake the stream');
+    await panel.reply(wake, imageResult('A'));
+    assert.equal(panel.elements.stage, oldImage, 'A wake-up frame cannot replace the protected image');
+    assert.equal(panel.elements['nav-back'].disabled, true, 'A wake-up frame cannot enable interaction');
+    const fresh = panel.take('preview_frame');
+    assert.equal(fresh.params.arguments.forceRefresh, true, 'A forced fresh frame is still required');
+    if (expectedDelay < 8000) {
+      await panel.reply(fresh, { isError: true, content: [{ type: 'text', text: 'refresh failed' }] });
+    } else {
+      await panel.reply(fresh, imageResult('A'));
+    }
+  }
+  assert.equal(panel.elements['nav-back'].disabled, false, 'A confirmed fresh frame restores interaction');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Retries must not replay input');
+}
+
+// A paused stream is woken by a normal frame read before retrying forced capture.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'STALE_PREVIEW_FRAME', stage: 'preview_action', inputNotSent: true }), isError: true });
+  const refresh = panel.take('preview_frame');
+  assert.equal(refresh.params.arguments.forceRefresh, true);
+  await panel.reply(refresh, { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_frame' }), isError: true });
+  const wake = panel.take('preview_frame');
+  assert.notEqual(wake.params.arguments.forceRefresh, true, 'Wake a paused stream with an ordinary read');
+  await panel.reply(wake, { structuredContent: { deviceId: 'A', connected: true, sessionId: 'session-A', seq: refresh.params.arguments.afterSeq, frame: null } });
+  assert.equal(panel.elements['nav-back'].disabled, true, 'A wake-up read is not a confirmed fresh frame');
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry, 'Retry forced capture with backoff after waking');
+  await panel.runTimer(retry.ms);
+  const retryWake = panel.take('preview_frame');
+  assert.notEqual(retryWake.params.arguments.forceRefresh, true);
+  await panel.reply(retryWake, imageResult('A'));
+  const recovered = panel.take('preview_frame');
+  assert.equal(recovered.params.arguments.forceRefresh, true);
+  await panel.reply(recovered, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, false, 'A confirmed fresh frame restores interaction');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Recovery must never replay input');
+}
+
+// A wake-up can initially remain disconnected while the device capture resumes asynchronously.
+{
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'STALE_PREVIEW_FRAME', stage: 'preview_action', inputNotSent: true }), isError: true });
+  await panel.reply(panel.take('preview_frame'), { ...textResult({ errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_frame' }), isError: true });
+  const firstWake = panel.take('preview_frame');
+  await panel.reply(firstWake, { structuredContent: { deviceId: 'A', connected: false, sessionId: 'session-A', seq: firstWake.params.arguments.afterSeq, frame: null } });
+  let retry = [...panel.timers.values()].find(({ ms }) => ms >= 100 && ms <= 10000);
+  assert.ok(retry, 'Disconnected wake schedules another read');
+  await panel.runTimer(retry.ms);
+  let wake = panel.take('preview_frame');
+  assert.notEqual(wake.params.arguments.forceRefresh, true);
+  assert.ok(Number.isInteger(wake.params.arguments.waitMs) && wake.params.arguments.waitMs > 0, 'Wait for capture to reconnect');
+  await panel.reply(wake, { structuredContent: { deviceId: 'A', connected: false, sessionId: 'session-A', seq: wake.params.arguments.afterSeq, frame: null } });
+  assert.equal(panel.elements['nav-back'].disabled, true, 'A disconnected wake cannot enable interaction');
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_frame'), 'Do not force refresh while capture is disconnected');
+  retry = [...panel.timers.values()].find(({ ms }) => ms >= 100 && ms <= 10000);
+  assert.ok(retry, 'Keep waiting for the device without a tight loop');
+  await panel.runTimer(retry.ms);
+  wake = panel.take('preview_frame');
+  assert.notEqual(wake.params.arguments.forceRefresh, true);
+  assert.ok(Number.isInteger(wake.params.arguments.waitMs) && wake.params.arguments.waitMs > 0);
+  await panel.reply(wake, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, true, 'A wake-up frame is not the final confirmed frame');
+  const fresh = panel.take('preview_frame');
+  assert.equal(fresh.params.arguments.forceRefresh, true);
+  await panel.reply(fresh, imageResult('A'));
+  assert.equal(panel.elements['nav-back'].disabled, false);
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'), 'Recovery must not replay input');
+}
+
+// Manual frame retry replaces the timer, and Stop cancels a scheduled retry.
+for (const choice of ['manual', 'stop']) {
+  const panel = await readyPanel();
+  await start(panel);
+  panel.clickImage(100, 100);
+  await flush();
+  await panel.reply(panel.take('preview_action'), { ...textResult({ errorCode: 'STALE_PREVIEW_FRAME', stage: 'preview_action', inputNotSent: true }), isError: true });
+  await panel.reply(panel.take('preview_frame'), { isError: true, content: [{ type: 'text', text: 'refresh failed' }] });
+  const retry = [...panel.timers.values()].find(({ ms }) => ms >= 500 && ms <= 10000);
+  assert.ok(retry);
+  if (choice === 'manual') {
+    panel.elements['retry-frame'].dispatch('click');
+    await flush();
+    assert.ok(![...panel.timers.values()].some(({ ms }) => ms === retry.ms), 'Manual retry cancels the scheduled retry');
+    const frame = panel.take('preview_frame');
+    assert.equal(frame.params.arguments.forceRefresh, true);
+    await panel.reply(frame, imageResult('A'));
+    assert.match(panel.elements.status.textContent, /not sent/i);
+  } else {
+    panel.elements.stop.dispatch('click');
+    await flush();
+    assert.ok(![...panel.timers.values()].some(({ ms }) => ms >= 500 && ms <= 10000), 'Stop cancels frame recovery');
+    assert.ok(!panel.sent.some((message) => ['preview_start', 'preview_frame'].includes(message.params?.name)));
+  }
+  assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
 }
 
 // A swipe that maps to one device pixel is definitely unsent only when the

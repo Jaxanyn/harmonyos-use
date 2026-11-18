@@ -43,6 +43,8 @@ let starting = false;
 let stopping = false;
 let building = false;
 let disposed = false;
+let suspended = false;
+let suspendedNeedsConfirmation = false;
 let frame;
 let frameSeq = 0;
 // Read available frames more often than the device captures them; this does not request a new capture.
@@ -57,6 +59,7 @@ let gesturePending = false;
 let captureQueue = Promise.resolve();
 let recovery;
 let recoveryProtocol = 0;
+let recoveryTimer;
 let zoom = 1;
 let markerTimer;
 let fullscreenStatusTimer;
@@ -240,8 +243,8 @@ function showGestureMarker(point) {
 function updateControls() {
   buttons.forEach((button) => { button.disabled = building; });
   devices.disabled = building || !deviceId;
-  buildButton.disabled = building || !deviceId || starting || stopping || gesturePending || displayModePending || hostDisplayUncertain || Boolean(recovery);
-  startButton.disabled = building || !deviceId || !subscriptionProtocol || previewRunning || starting || stopping;
+  buildButton.disabled = building || suspended || !deviceId || starting || stopping || gesturePending || displayModePending || hostDisplayUncertain || Boolean(recovery);
+  startButton.disabled = building || suspended || !deviceId || !subscriptionProtocol || previewRunning || starting || stopping;
   stopButton.disabled = building || !previewRunning;
   for (const button of [backButton, homeButton]) {
     button.disabled = building || starting || stopping || !previewRunning || gesturePending || displayModePending || hostDisplayUncertain || !sessionId || !frame?.frameId || frameSeq < 1;
@@ -390,7 +393,7 @@ async function refreshDevices() {
 }
 
 function isCurrent(requestedGeneration, requestedDevice) {
-  return !disposed && previewRunning && generation === requestedGeneration && deviceId === requestedDevice;
+  return !disposed && !suspended && previewRunning && generation === requestedGeneration && deviceId === requestedDevice;
 }
 
 function clearFrame(message = 'Waiting for first frame', showOverlay = true) {
@@ -414,6 +417,8 @@ function clearFrame(message = 'Waiting for first frame', showOverlay = true) {
 function resetPreview() {
   generation += 1;
   previewRunning = false;
+  suspended = false;
+  suspendedNeedsConfirmation = false;
   actionStats = { tap: { samples: [], canceled: 0, uncertain: 0 }, swipe: { samples: [], canceled: 0, uncertain: 0 }, unclassified: 0 };
   recentCancellations = [];
   status.dataset.lastCancellation = '';
@@ -424,6 +429,8 @@ function resetPreview() {
   importantNotice = '';
   clearTimeout(pollTimer);
   pollTimer = undefined;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = undefined;
   recovery = undefined;
   recoveryProtocol = 0;
   clearFrame();
@@ -447,13 +454,55 @@ function selectDevice(selected) {
   updateControls();
 }
 
-function subscriptionUnavailable() {
-  const previousSession = resetPreview();
+function subscriptionUnavailable({ requireConfirmation = false } = {}) {
+  if (!previewRunning || disposed) return;
+  const previousSession = { sessionId, subscriberId };
+  const requestedDevice = deviceId;
+  const requestedGeneration = ++generation;
+  clearTimeout(pollTimer);
+  clearTimeout(recoveryTimer);
+  pollTimer = undefined;
+  recoveryTimer = undefined;
+  recovery = undefined;
+  sessionId = '';
+  subscriberId = '';
+  frameSeq = 0;
+  recoveryProtocol = 0;
+  clearFrame('Reconnecting preview…');
+  setStatus(importantNotice || 'Preview session unavailable; reconnecting…', true);
   stopSession(previousSession).catch(() => {});
-  const message = 'Preview subscription expired or changed. Start preview again.';
-  setOverlay(message);
-  setStatus(message, true);
+  scheduleReconnect(requestedGeneration, requestedDevice, 1000, requireConfirmation);
   updateControls();
+}
+
+function scheduleReconnect(requestedGeneration, requestedDevice, delay = 1000, requireConfirmation = false) {
+  if (!isCurrent(requestedGeneration, requestedDevice)) return;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = setTimeout(async () => {
+    recoveryTimer = undefined;
+    if (!isCurrent(requestedGeneration, requestedDevice)) return;
+    try {
+      const info = parseText(await callServerTool('preview_start', { deviceId: requestedDevice, subscriber: true }));
+      const subscription = { sessionId: info.sessionId, subscriberId: info.subscriberId };
+      if (!isCurrent(requestedGeneration, requestedDevice)) {
+        await stopSession(subscription).catch(() => {});
+        return;
+      }
+      if (info.deviceId !== requestedDevice || info.previewSubscriptionProtocol !== 1 || !subscription.sessionId || !subscription.subscriberId) {
+        await stopSession(subscription).catch(() => {});
+        throw new Error('Preview subscription did not match the selected device');
+      }
+      sessionId = subscription.sessionId;
+      subscriberId = subscription.subscriberId;
+      recoveryProtocol = info.previewRecoveryProtocol === 1 ? 1 : 0;
+      beginRecovery('Preview reconnected; waiting for a fresh frame.', { manual: requireConfirmation });
+    } catch (error) {
+      if (!isCurrent(requestedGeneration, requestedDevice)) return;
+      const reason = error.errorCode === 'PREVIEW_IN_USE' ? 'Another device is using preview; waiting.' : 'Preview reconnect failed; retrying.';
+      setStatus(`${importantNotice ? `${importantNotice} ` : ''}${reason}`, true);
+      scheduleReconnect(requestedGeneration, requestedDevice, Math.min(delay * 2, 10000), requireConfirmation);
+    }
+  }, delay);
 }
 
 async function renderImage(result, requestedGeneration, requestedDevice, canCommit = () => !recovery) {
@@ -508,13 +557,17 @@ function requestFrame(requestedGeneration, requestedDevice, waitMs = 0, manualRe
       const structured = result.structuredContent ?? {};
       if (structured.connected === false) {
         clearFrame('Device disconnected. Waiting for reconnection.');
-        setStatus(`Preview disconnected: ${requestedDevice}`, true);
+        if (manualRecovery) {
+          importantNotice = 'Action sent; result unknown. Check the device before trying again.';
+          beginRecovery(importantNotice, { manual: true });
+        } else {
+          setStatus(`Preview disconnected: ${requestedDevice}`, true);
+        }
         return false;
       }
       if (!sessionId || structured.sessionId !== sessionId) {
-        resetPreview();
-        setOverlay('Preview session changed. Start preview again.');
-        setStatus('Preview session changed. Start preview again.', true);
+        if (manualRecovery) importantNotice = 'Action sent; result unknown. Check the device before trying again.';
+        subscriptionUnavailable({ requireConfirmation: manualRecovery });
         return false;
       }
       if (!structured.frame) {
@@ -530,7 +583,14 @@ function requestFrame(requestedGeneration, requestedDevice, waitMs = 0, manualRe
     } catch (error) {
       if (isCurrent(requestedGeneration, requestedDevice)) {
         if (error.errorCode === 'PREVIEW_UNAVAILABLE' && error.stage === 'preview_subscription') {
-          subscriptionUnavailable();
+          if (manualRecovery) importantNotice = 'Action sent; result unknown. Check the device before trying again.';
+          subscriptionUnavailable({ requireConfirmation: manualRecovery });
+          return false;
+        }
+        if (manualRecovery) {
+          importantNotice = 'Action sent; result unknown. Check the device before trying again.';
+          if (/disconnect|offline/i.test(error.message)) clearFrame('Device disconnected. Check the device before trying again.');
+          beginRecovery(importantNotice, { manual: true });
           return false;
         }
         if (!stage.hidden && stage.src && !/disconnect|offline|session changed/i.test(error.message)) {
@@ -554,10 +614,10 @@ async function requestFreshFrame(requestedGeneration, requestedDevice) {
   return requestFrame(requestedGeneration, requestedDevice, 2500, true);
 }
 
-function beginRecovery(message, { manual = false } = {}) {
+function beginRecovery(message, { manual = false, retryDelay = 1000 } = {}) {
   if (recovery || !sessionId || !previewRunning) return;
   preciseBinding = undefined;
-  const attempt = { generation, deviceId, sessionId, subscriberId, afterSeq: frameSeq };
+  const attempt = { generation, deviceId, sessionId, subscriberId, afterSeq: frameSeq, manual };
   recovery = attempt;
   if (gestureStart) {
     lastActionTimings = undefined;
@@ -572,7 +632,7 @@ function beginRecovery(message, { manual = false } = {}) {
   hideGestureMarker();
   clearTimeout(pollTimer);
   pollTimer = undefined;
-  setStatus(message, true);
+  setStatus(`${importantNotice ? `${importantNotice} ` : ''}${message}`, true);
   updateControls();
   if (recoveryProtocol !== 1) {
     setStatus('Preview host is outdated; reconnect Codex to enable safe recovery.', true);
@@ -592,15 +652,11 @@ function beginRecovery(message, { manual = false } = {}) {
       if (!current()) return;
       const value = result.structuredContent ?? {};
       if (value.connected === false) {
-        recovery = undefined;
         clearFrame('Device disconnected. Waiting for reconnection.');
-        setStatus(`Preview disconnected: ${attempt.deviceId}`, true);
-        return;
+        throw Object.assign(new Error('Preview disconnected'), { errorCode: 'PREVIEW_UNAVAILABLE', stage: 'preview_frame' });
       }
       if (value.sessionId !== attempt.sessionId) {
-        resetPreview();
-        setOverlay('Preview session changed. Start preview again.');
-        setStatus('Preview session changed. Start preview again.', true);
+        subscriptionUnavailable();
         return;
       }
       if (value.deviceId !== attempt.deviceId || !Number.isInteger(value.seq) || value.seq <= attempt.afterSeq || !value.frame?.frameId) {
@@ -621,12 +677,51 @@ function beginRecovery(message, { manual = false } = {}) {
         subscriptionUnavailable();
         return;
       }
+      if (error.errorCode === 'PREVIEW_UNAVAILABLE' && error.stage === 'preview_frame') {
+        try {
+          await callServerTool('preview_frame', { afterSeq: attempt.afterSeq, sessionId: attempt.sessionId, subscriberId: attempt.subscriberId });
+        } catch (resumeError) {
+          if (!current()) return;
+          if (resumeError.errorCode === 'PREVIEW_UNAVAILABLE' && resumeError.stage === 'preview_subscription') {
+            subscriptionUnavailable();
+            return;
+          }
+        }
+        if (!current()) return;
+      }
       attempt.failed = true;
       retryFrameButton.hidden = false;
-      setStatus('Preview refresh failed; retry the frame or stop and start preview.', true);
+      setStatus(`${importantNotice ? `${importantNotice} ` : ''}Preview refresh failed; retrying.`, true);
+      scheduleRecoveryRetry(attempt, message, retryDelay);
     }
   });
   captureQueue = task;
+}
+
+function scheduleRecoveryRetry(attempt, message, delay) {
+  clearTimeout(recoveryTimer);
+  recoveryTimer = setTimeout(async () => {
+    recoveryTimer = undefined;
+    const current = () => recovery === attempt && isCurrent(attempt.generation, attempt.deviceId) && sessionId === attempt.sessionId && subscriberId === attempt.subscriberId;
+    if (!current()) return;
+    try {
+      const wake = await callServerTool('preview_frame', { afterSeq: attempt.afterSeq, waitMs: 2500, sessionId: attempt.sessionId, subscriberId: attempt.subscriberId });
+      if (!current()) return;
+      if (wake.structuredContent?.connected === false) {
+        scheduleRecoveryRetry(attempt, message, 1000);
+        return;
+      }
+    } catch (error) {
+      if (!current()) return;
+      if (error.errorCode === 'PREVIEW_UNAVAILABLE' && error.stage === 'preview_subscription') {
+        subscriptionUnavailable();
+        return;
+      }
+    }
+    if (!current()) return;
+    recovery = undefined;
+    beginRecovery(message, { retryDelay: Math.min(delay * 2, 10000) });
+  }, delay);
 }
 
 function scheduleCapture(requestedGeneration, requestedDevice) {
@@ -641,7 +736,7 @@ function scheduleCapture(requestedGeneration, requestedDevice) {
 async function startPreview() {
   if (!deviceId) throw new Error('Select a device first');
   if (subscriptionProtocol !== 1) return;
-  if (previewRunning || disposed || starting || stopping || building) return;
+  if (previewRunning || disposed || suspended || starting || stopping || building) return;
   importantNotice = '';
   const requestedDevice = deviceId;
   const requestedGeneration = ++generation;
@@ -699,7 +794,7 @@ async function stopPreview(force = false) {
 
 async function buildRun() {
   if (!deviceId) throw new Error('Select a device first');
-  if (building || starting || stopping || gesturePending || disposed || recovery) return;
+  if (building || starting || stopping || gesturePending || disposed || suspended || recovery) return;
   importantNotice = '';
   const requestedDevice = deviceId;
   const requestedGeneration = generation;
@@ -1181,8 +1276,7 @@ async function performAction(label, getArguments, requireBarrier = false, timing
         beginRecovery(importantNotice);
       } else {
         importantNotice = `Action result unknown: ${error.message}`;
-        if (!stage.hidden && stage.src) beginRecovery(importantNotice, { manual: true });
-        else clearFrame('Action result unknown. Check the device before trying again.');
+        beginRecovery(importantNotice, { manual: true });
       }
       if (!rejectedBeforeInput || recoveryProtocol === 1) setStatus(importantNotice, true);
       if (stalePreflight) status.dataset.gestureDiagnostic = JSON.stringify({ reason: 'stale_preview',
@@ -1291,6 +1385,32 @@ function teardown() {
   pending.clear();
 }
 
+function suspendPreview() {
+  if (disposed || suspended) return;
+  suspended = true;
+  suspendedNeedsConfirmation = Boolean(gesturePending || recovery?.manual || /result unknown/i.test(importantNotice));
+  if (gesturePending) importantNotice = 'Action may have been sent; result unknown. Check the device before trying again.';
+  generation += 1;
+  clearTimeout(pollTimer);
+  clearTimeout(recoveryTimer);
+  pollTimer = undefined;
+  recoveryTimer = undefined;
+  recovery = undefined;
+  captureQueue = Promise.resolve();
+  clearFrame('Preview suspended.');
+  if (previewRunning) setStatus(importantNotice || 'Preview suspended.', true);
+}
+
+function resumePreview() {
+  if (disposed || !suspended) return;
+  suspended = false;
+  const requireConfirmation = suspendedNeedsConfirmation;
+  suspendedNeedsConfirmation = false;
+  if (!previewRunning) { updateControls(); return; }
+  if (!sessionId || !subscriberId) subscriptionUnavailable({ requireConfirmation });
+  else beginRecovery('Preview resumed; waiting for a fresh frame.', { manual: requireConfirmation });
+}
+
 devices.addEventListener('change', () => { if (building) devices.value = deviceId; else selectDevice(devices.value); });
 document.querySelector('#refresh').addEventListener('click', () => { importantNotice = ''; refreshDevices().catch((error) => setStatus(error.message, true)); });
 document.querySelector('#build').addEventListener('click', () => buildRun().catch((error) => setStatus(error.message, true)));
@@ -1298,6 +1418,8 @@ document.querySelector('#start').addEventListener('click', () => startPreview().
 document.querySelector('#stop').addEventListener('click', () => stopPreview().catch((error) => setStatus(error.message, true)));
 retryFrameButton.addEventListener('click', () => {
   if (!recovery?.failed || !isCurrent(recovery.generation, recovery.deviceId) || sessionId !== recovery.sessionId || subscriberId !== recovery.subscriberId) return;
+  clearTimeout(recoveryTimer);
+  recoveryTimer = undefined;
   recovery = undefined;
   beginRecovery('Refreshing preview; interaction unavailable.');
 });
@@ -1509,7 +1631,8 @@ window.addEventListener('blur', () => {
   cancelGesture();
   showGestureCanceled(undefined, 'window lost focus');
 });
-window.addEventListener('pagehide', teardown);
+window.addEventListener('pagehide', (event) => { if (event?.persisted) suspendPreview(); else teardown(); });
+window.addEventListener('pageshow', (event) => { if (event?.persisted) resumePreview(); });
 if (typeof ResizeObserver === 'function') {
   frameResizeObserver = new ResizeObserver(sizeFrame);
   frameResizeObserver.observe(frameShell);

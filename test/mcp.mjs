@@ -103,6 +103,7 @@ try {
   assert.equal(buildTool.inputSchema.properties.moduleName.pattern, '^[A-Za-z0-9_-]+$');
   assert.equal(buildTool.inputSchema.properties.artifactName.pattern, '^[A-Za-z0-9._-]+\\.hap$');
   const entrypoint = listed.result.tools.find((tool) => tool.name === 'preview_open');
+  assert.equal(entrypoint.title, 'harmonyos-use');
   assert.deepEqual(entrypoint._meta, {
     ui: { resourceUri: 'ui://harmonyos-preview/app', visibility: ['app'] },
     'openai/ui': { entrypoints: [{ type: 'global' }] }
@@ -110,12 +111,13 @@ try {
   const resource = await request('resources/read', { uri: 'ui://harmonyos-preview/app' });
   assert.equal(resource.result.contents[0].mimeType, 'text/html;profile=mcp-app');
   assert.ok(resource.result.contents[0].text.length < 128 * 1024, 'MCP App resource should stay small enough for host loading');
-  assert.match(resource.result.contents[0].text, /HarmonyOS Preview/);
+  assert.match(resource.result.contents[0].text, /<title>harmonyos-use<\/title>/);
+  assert.match(resource.result.contents[0].text, /<h1>harmonyos-use<\/h1>/);
   assert.match(resource.result.contents[0].text, /ui\/initialize/);
   assert.deepEqual(resource.result.contents[0]._meta, { 'openai/ui': { preferredDisplayMode: 'fullscreen', availableDisplayModes: ['fullscreen', 'inline'] } });
   assert.deepEqual((await request('tools/call', { name: 'preview_open', arguments: {} })).result.structuredContent, { app: 'harmonyos-preview' });
   const panel = listed.result.tools.find((tool) => tool.name === 'preview_panel');
-  assert.equal(panel.title, '鸿蒙真机预览');
+  assert.equal(panel.title, 'harmonyos-use');
   assert.deepEqual(panel._meta, {
     ui: { resourceUri: 'ui://harmonyos-preview/app', visibility: ['model', 'app'] },
     'openai/ui': { entrypoints: [{ type: 'thread' }] }

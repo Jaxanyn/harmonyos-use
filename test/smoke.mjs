@@ -56,6 +56,12 @@ const { port } = server.address();
 let socket;
 
 try {
+  const page = await fetch(`http://127.0.0.1:${port}/`);
+  assert.equal(page.status, 200);
+  const html = await page.text();
+  assert.match(html, /<title>harmonyos-use<\/title>/);
+  assert.match(html, /<h1>harmonyos-use<\/h1>/);
+
   const health = await fetch(`http://127.0.0.1:${port}/health`);
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { name: 'harmonyos-preview', status: 'ok' });

@@ -2,7 +2,7 @@
 
 # Codex 使用说明
 
-HarmonyOS Use 的 MCP 注册名和命令为 `harmonyos-preview`，预览面板名称为 HarmonyOS Preview；现有环境变量保持兼容。
+harmonyos-use 的 MCP 注册名和命令为 `harmonyos-preview`，预览面板名称为 harmonyos-use；现有环境变量保持兼容。
 
 ## 快速导航
 
@@ -80,7 +80,7 @@ node bin/harmonyos-preview.mjs --project C:\path\to\my-harmonyos-project
 当前 MCP 服务提供 `preview_open` Global Entrypoint 和 `ui://harmonyos-preview/app` MCP App 资源。完成注册后：
 
 1. 刷新 MCP 工具列表或重启 Codex Desktop。
-2. 在侧边栏的“···”菜单中找到 HarmonyOS Preview。
+2. 在侧边栏的“···”菜单中找到 harmonyos-use。
 3. 选择“固定到侧边栏”。
 4. 打开面板，选择设备并启动预览；`preview_start` 会开始采集并等待首帧。
 
@@ -90,11 +90,11 @@ node bin/harmonyos-preview.mjs --project C:\path\to\my-harmonyos-project
 
 ### 在当前对话右侧显示
 
-`preview_panel` 提供 Thread Entrypoint，标题为“鸿蒙真机预览”。重启 Codex 后，可以从当前对话的面板入口打开这个标签。也可以让 Agent 调用 `preview_panel`；具体首次展示位置由宿主决定。若工具结果先显示在聊天中，通过宿主的展开操作打开面板。
+`preview_panel` 提供 Thread Entrypoint，标题为 harmonyos-use。重启 Codex 后，可以从当前对话的面板入口打开这个标签。也可以让 Agent 调用 `preview_panel`；具体首次展示位置由宿主决定。若工具结果先显示在聊天中，通过宿主的展开操作打开面板。
 
 打开后保持该标签即可在当前对话旁使用；入口本身不保证切换对话或重启后继续显示，也不能强制宿主固定。左侧的 `preview_open` Global Entrypoint 仍用于全局导航。
 
-提示词：`在当前对话右侧打开鸿蒙真机预览，调用 preview_panel。`
+提示词：`在当前对话右侧打开 harmonyos-use 预览，调用 preview_panel。`
 
 ### 设备操作
 

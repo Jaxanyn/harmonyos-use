@@ -77,6 +77,8 @@ try {
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
   const app = page.frame({ name: 'preview' });
   assert.ok(app, 'mock host must contain the real built app');
+  assert.equal(await app.title(), 'harmonyos-use');
+  assert.equal(await app.locator('h1').textContent(), 'harmonyos-use');
   await app.waitForFunction(() => !document.getElementById('start').disabled);
   await app.locator('#start').click();
   await app.waitForFunction(() => !document.getElementById('nav-home').disabled);
@@ -337,6 +339,15 @@ try {
   assert.match(await app.locator('#action-summary').textContent(), /tap: n=2/);
   for (const viewport of [{ width: 320, height: 400 }, { width: 390, height: 500 }, { width: 480, height: 580 }, { width: 900, height: 900 }]) {
     await page.setViewportSize(viewport);
+    const headingBox = await app.locator('header h1').boundingBox();
+    const statusBox = await app.locator('#status').boundingBox();
+    assert.ok(headingBox && statusBox && headingBox.y < statusBox.y + statusBox.height && statusBox.y < headingBox.y + headingBox.height,
+      `heading and status must share a row at ${viewport.width}px`);
+    assert.ok(headingBox.x + headingBox.width <= statusBox.x && statusBox.x + statusBox.width <= viewport.width,
+      `heading and status must not overlap or overflow at ${viewport.width}px`);
+    const hint = app.locator('header .hint');
+    assert.match(await hint.textContent(), /点击.*拖动/);
+    assert.equal(await hint.isVisible(), viewport.height > 500, 'short panels reserve height for the device image');
     await app.locator('#stage').scrollIntoViewIfNeeded();
     const before = await app.locator('#stage').boundingBox();
     const longStatus = 'Preview unavailable: '.repeat(20);

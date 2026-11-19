@@ -206,10 +206,26 @@ function createPanel({ autoPreflight = true, hostSubscriptionProtocol = 1, pixel
     }
   };
   return { elements, sent, timers, windowListeners, documentListeners, document: context.document, parent, hostStyles, pixelFrames, pixelViews, wordViews, take, reply, runPoll, runTimer, clickImage, resize,
+    setStatus(...args) { context.setStatus(...args); },
     recordAction(...args) { context.recordAction(...args); },
     scanTargetMargin(...args) { return context.scanTargetMargin(...args); },
     countChangedPixels(...args) { return context.countChangedPixels(...args); },
     getWordViewAttempts() { return wordViewAttempts; }, disableCanvas() { canvasUnavailable = true; }, advance(ms) { time += ms; } };
+}
+
+// Repeated frame updates must not interrupt reading a long status.
+{
+  const panel = createPanel();
+  panel.setStatus('A long warning message', true);
+  panel.elements.status.scrollTop = 12;
+  panel.setStatus('A long warning message', false);
+  assert.equal(panel.elements.status.scrollTop, 12);
+  assert.equal(panel.elements.status.className, 'status');
+  panel.setStatus('设备已就绪');
+  assert.equal(panel.elements.status.scrollTop, 0);
+  assert.equal(panel.elements.status.lang, 'zh-CN');
+  panel.setStatus('Device disconnected', true);
+  assert.equal(panel.elements.status.lang, 'en');
 }
 
 // Host height and safe areas are honored without losing values on partial context updates.
@@ -2920,7 +2936,8 @@ for (const outcome of ['error', 'empty', 'old', 'wrong-device', 'disconnect', 'w
   assert.equal(panel.elements.stage.hidden, true);
   assert.equal(panel.elements['stale-notice'].hidden, true);
   assert.equal(panel.elements['retry-frame'].hidden, true);
-  assert.match(panel.elements.status.textContent, /Device ready: B/);
+  assert.match(panel.elements.status.textContent, /设备已就绪/);
+  assert.equal(panel.elements.devices.value, 'B');
 }
 
 // Old hosts cannot promise a fresh capture and must never receive a force refresh.
@@ -2966,7 +2983,8 @@ for (const changeDevice of [false, true]) {
     panel.elements.devices.dispatch('change');
   }
   await panel.reply(action, { isError: true, content: [{ type: 'text', text: 'action timed out' }] });
-  assert.match(panel.elements.status.textContent, changeDevice ? /Device ready: B/ : /Action result unknown: action timed out/);
+  assert.match(panel.elements.status.textContent, changeDevice ? /设备已就绪/ : /Action result unknown: action timed out/);
+  if (changeDevice) assert.equal(panel.elements.devices.value, 'B');
   assert.equal(panel.elements.stage.hidden, changeDevice, 'Keep the old image only on the same device');
   if (!changeDevice) {
     assert.equal(panel.elements['stale-notice'].hidden, false);
@@ -3063,7 +3081,8 @@ for (const action of ['back', 'home']) {
   await start(panel, 'B');
   const newSeq = nextFrameSeq;
   await panel.reply(oldAction, textResult({ metrics: { nextFrameAfterSeq: newSeq + 10000 } }));
-  assert.match(panel.elements.status.textContent, /Preview running: B/);
+  assert.match(panel.elements.status.textContent, /预览中/);
+  assert.equal(panel.elements.devices.value, 'B');
   await panel.runPoll();
   assert.equal(panel.take('preview_frame').params.arguments.afterSeq, newSeq);
 }
@@ -3078,7 +3097,8 @@ for (const action of ['back', 'home']) {
   panel.elements.devices.value = 'B';
   panel.elements.devices.dispatch('change');
   await panel.reply(capture, imageResult('A'));
-  assert.match(panel.elements.status.textContent, /Device ready: B/);
+  assert.match(panel.elements.status.textContent, /设备已就绪/);
+  assert.equal(panel.elements.devices.value, 'B');
   assert.ok(!panel.sent.some((message) => message.params?.name === 'preview_action'));
 }
 

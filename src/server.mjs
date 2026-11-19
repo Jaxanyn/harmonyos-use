@@ -13,13 +13,13 @@ const port = Number(process.env.HARMONY_PREVIEW_PORT ?? 4100);
 
 const previewPage = `<!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>HarmonyOS Preview</title>
+<title>harmonyos-use</title>
 <style>
   :root{color-scheme:dark;font:14px system-ui,sans-serif}*{box-sizing:border-box}body{margin:0;height:100vh;height:100dvh;min-height:0;background:#0c0f14;color:#f4f6fa;display:flex;flex-direction:column}
   aside{flex:none;display:flex;align-items:center;gap:16px;flex-wrap:wrap;padding:12px 18px;background:#151a22;border-bottom:1px solid #2a303b;box-shadow:0 4px 18px #0003}h1{font-size:18px;margin:0}.brand{display:flex;align-items:center;gap:12px;margin-right:8px}.brand p{margin:0}p{color:#aeb8c8;line-height:1.5}#status{color:#75e0aa}.device{display:flex;align-items:center;gap:8px;color:#aeb8c8}.actions{display:flex;align-items:center;gap:8px;flex-wrap:wrap}select,button{min-height:32px;border:1px solid #3b4554;border-radius:6px;background:#202733;color:#f4f6fa;padding:6px 10px}button{cursor:pointer}button:hover:not(:disabled){background:#2b3544}button:disabled{opacity:.55;cursor:default}
   main{flex:1;display:flex;min-width:0;min-height:0;padding:12px;overflow:auto;background:#171d26}#stage{display:block;flex:none;max-width:100%;max-height:100%;width:auto;height:auto;margin:auto;background:#000;cursor:crosshair}#stage[hidden]{display:none}
   @media (max-width:720px){aside{align-items:flex-start;gap:10px;padding:12px}.brand{width:100%;justify-content:space-between}.device{flex:1}.actions{width:100%}main{padding:8px}}
-</style></head><body><aside><div class="brand"><h1>HarmonyOS Preview</h1><p id="status">Connecting…</p></div><label class="device">设备 / 型号<select id="devices"><option value="">No device selected</option></select></label><div class="actions"><button id="refresh">Refresh devices</button><button id="build">Build · Install · Run</button><button id="shot">Capture screenshot</button><button id="start">Start preview</button><button id="stop">Stop preview</button><button id="back" type="button" title="Back" aria-label="Back" disabled>返回</button><button id="home" type="button" title="Home" aria-label="Home" disabled>主页</button></div></aside><main><img id="stage" alt="HarmonyOS preview frame" hidden></main>
+</style></head><body><aside><div class="brand"><h1>harmonyos-use</h1><p id="status">Connecting…</p></div><label class="device">设备 / 型号<select id="devices"><option value="">No device selected</option></select></label><div class="actions"><button id="refresh">Refresh devices</button><button id="build">Build · Install · Run</button><button id="shot">Capture screenshot</button><button id="start">Start preview</button><button id="stop">Stop preview</button><button id="back" type="button" title="Back" aria-label="Back" disabled>返回</button><button id="home" type="button" title="Home" aria-label="Home" disabled>主页</button></div></aside><main><img id="stage" alt="HarmonyOS preview frame" hidden></main>
 <script>
 const stage=document.querySelector('#stage');
 const status=document.querySelector('#status');
@@ -143,7 +143,7 @@ stage.onpointerup=event=>{
 stage.onpointercancel=cancelGesture;
 </script></body></html>`;
 
-const staticFrame = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920"><rect width="1080" height="1920" fill="#10151c"/><rect x="48" y="70" width="984" height="1780" rx="42" fill="#1b2430"/><text x="540" y="850" text-anchor="middle" fill="#f4f6fa" font-size="56" font-family="system-ui">HarmonyOS Preview</text><text x="540" y="940" text-anchor="middle" fill="#9eabbc" font-size="34" font-family="system-ui">Static frame</text><circle cx="540" cy="1070" r="54" fill="#4f7cff"/></svg>`);
+const staticFrame = Buffer.from(`<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1920" viewBox="0 0 1080 1920"><rect width="1080" height="1920" fill="#10151c"/><rect x="48" y="70" width="984" height="1780" rx="42" fill="#1b2430"/><text x="540" y="850" text-anchor="middle" fill="#f4f6fa" font-size="56" font-family="system-ui">harmonyos-use</text><text x="540" y="940" text-anchor="middle" fill="#9eabbc" font-size="34" font-family="system-ui">Static frame</text><circle cx="540" cy="1070" r="54" fill="#4f7cff"/></svg>`);
 const configuredPollMs = Number(process.env.HARMONY_PREVIEW_POLL_MS ?? 500);
 const pollMs = Number.isFinite(configuredPollMs) ? Math.max(100, Math.floor(configuredPollMs)) : 500;
 const configuredBackoffMaxMs = Number(process.env.HARMONY_PREVIEW_BACKOFF_MAX_MS ?? 10000);
@@ -532,6 +532,6 @@ function pausePolling(socket, sessions, state) {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   createPreviewServer().listen(port, host, () => {
-    console.log(`HarmonyOS Preview listening at http://${host}:${port}`);
+    console.log(`harmonyos-use listening at http://${host}:${port}`);
   });
 }

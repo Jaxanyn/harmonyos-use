@@ -95,8 +95,8 @@ const tools = [
   { name: 'build_run', description: 'Build the configured project, install one selected module HAP and launch it. Defaults to entry; specify artifactName when the module produces multiple HAP artifacts. Changes device state; requires user authorization.', properties: { deviceId: device, moduleName: buildModuleName, artifactName: buildArtifactName }, required: ['deviceId'] },
   { name: 'preview_info', description: 'Return preview status, loaded capabilities and runtime identity. Optional deviceId checks HDC availability without starting preview. connected describes live preview frames, not device connectivity; this service cannot verify or refresh the host tool cache.', properties: { deviceId: device }, required: [] },
   {
-    name: 'preview_open', title: 'HarmonyOS Preview',
-    description: 'Open the HarmonyOS Preview app. The app can select a device and control its live preview.',
+    name: 'preview_open', title: 'harmonyos-use',
+    description: 'Open the harmonyos-use app. The app can select a device and control its live preview.',
     properties: {}, required: [],
     _meta: {
       ui: { resourceUri: appResourceUri, visibility: ['app'] },
@@ -104,7 +104,7 @@ const tools = [
     }
   },
   {
-    name: 'preview_panel', title: '鸿蒙真机预览',
+    name: 'preview_panel', title: 'harmonyos-use',
     description: 'Open the HarmonyOS live device preview beside the current conversation in its right side panel.',
     properties: {}, required: [],
     _meta: {

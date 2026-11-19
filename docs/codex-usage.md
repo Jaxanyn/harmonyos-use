@@ -1,6 +1,6 @@
 # Codex 使用说明
 
-HarmonyOS Use 的 MCP 注册名为 `harmonyos-preview`，预览面板名称为 HarmonyOS Preview。
+harmonyos-use 的 MCP 注册名为 `harmonyos-preview`，预览面板名称为 harmonyos-use。
 
 ## 安装 MCP
 

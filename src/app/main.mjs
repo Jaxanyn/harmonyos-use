@@ -162,9 +162,12 @@ function recordAction(label, outcome, message, timings, reason) {
 
 function setStatus(message, error = false, buildStatus = false, neutral = false) {
   if (building && !buildStatus) return;
-  status.textContent = message;
+  if (status.textContent !== message) {
+    status.textContent = message;
+    status.scrollTop = 0;
+  }
   status.title = message;
-  status.scrollTop = 0;
+  status.lang = ['设备已就绪', '预览中', '已连接 Codex'].includes(message) ? 'zh-CN' : 'en';
   status.className = error ? 'error' : neutral ? 'neutral' : 'status';
   clearTimeout(fullscreenStatusTimer);
   const showInFullscreen = document.fullscreenElement === frameShell && (error || /Previous action|Gesture|Preview changed|Device dimensions|result unknown/i.test(message));
@@ -388,7 +391,7 @@ async function refreshDevices() {
   if (selected !== previous) selectDevice(selected);
   devices.value = deviceId;
   if (!previewRunning) setStatus(!subscriptionProtocol ? 'Preview host is outdated; reconnect Codex to enable safe panel subscriptions.'
-    : deviceId ? `Device ready: ${deviceId}` : 'No device connected', !subscriptionProtocol || !deviceId);
+    : deviceId ? '设备已就绪' : 'No device connected', !subscriptionProtocol || !deviceId);
   updateControls();
 }
 
@@ -450,7 +453,7 @@ function selectDevice(selected) {
   deviceId = selected;
   devices.value = selected;
   stopSession(previousSession).catch(() => {});
-  setStatus(selected ? `Device ready: ${selected}` : 'No device connected', !selected);
+  setStatus(selected ? '设备已就绪' : 'No device connected', !selected);
   updateControls();
 }
 
@@ -578,7 +581,7 @@ function requestFrame(requestedGeneration, requestedDevice, waitMs = 0, manualRe
       }
       const rendered = await renderImage(result, requestedGeneration, requestedDevice);
       if (rendered && Number.isInteger(structured.seq)) frameSeq = Math.max(frameSeq, structured.seq);
-      if (rendered && !gesturePending && now() >= feedbackUntil) setStatus(importantNotice || `Preview running: ${requestedDevice}`, Boolean(importantNotice));
+      if (rendered && !gesturePending && now() >= feedbackUntil) setStatus(importantNotice || '预览中', Boolean(importantNotice));
       return rendered;
     } catch (error) {
       if (isCurrent(requestedGeneration, requestedDevice)) {
@@ -774,7 +777,7 @@ async function startPreview() {
   } finally {
     starting = false;
     if (isCurrent(requestedGeneration, requestedDevice) && frame && status.textContent === `Starting preview: ${requestedDevice}`) {
-      setStatus(`Preview running: ${requestedDevice}`);
+      setStatus('预览中');
     }
     updateControls();
   }
@@ -1643,7 +1646,7 @@ if (typeof ResizeObserver === 'function') {
 async function initialize() {
   try {
     await connect();
-    setStatus('HarmonyOS Preview connected');
+    setStatus('已连接 Codex');
     const info = parseText(await callServerTool('preview_info'));
     subscriptionProtocol = info.previewSubscriptionProtocol === 1 ? 1 : 0;
     await refreshDevices();
